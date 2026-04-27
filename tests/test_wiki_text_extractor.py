@@ -4,6 +4,7 @@ import unittest
 from wiki_text_extractor import (
     clean_plain_text,
     clean_wikipedia_html,
+    compare_texts,
     output_path_for_method,
     page_request_from_url,
 )
@@ -55,6 +56,13 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         path = output_path_for_method("output/saturn.txt", "html", split_methods=True)
 
         self.assertEqual(path, Path("output/saturn_html.txt"))
+
+    def test_compare_texts_reports_mismatch(self):
+        report = compare_texts("Line one\nLine two", "Line one\nLine three")
+
+        self.assertIn("Exact match: False", report)
+        self.assertIn("-Line two", report)
+        self.assertIn("+Line three", report)
 
 
 if __name__ == "__main__":

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 import sys
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -21,7 +23,7 @@ TAIL_SECTION_PATTERN = re.compile(
     r"\n\s*==\s*(See also|References|External links|Further reading|Notes)\s*==[\s\S]*$",
     re.IGNORECASE,
 )
-INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,–-]\s*\d+)*\]")
+INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
 
 
 @dataclass(frozen=True)
@@ -256,6 +258,42 @@ def output_path_for_method(output: str, method: str, split_methods: bool) -> Pat
 def write_text_file(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text + "\n", encoding="utf-8")
+
+
+def run_extraction(page: PageRequest, method: str) -> tuple[str, float]:
+    started_at = time.perf_counter()
+    text = extract_text(page, method)
+    return text, time.perf_counter() - started_at
+
+
+def compare_texts(extracts_text: str, html_text: str) -> str:
+    extracts_lines = extracts_text.splitlines()
+    html_lines = html_text.splitlines()
+    diff = list(
+        difflib.unified_diff(
+            extracts_lines,
+            html_lines,
+            fromfile="extracts_api",
+            tofile="html_parser",
+            lineterm="",
+        )
+    )
+    report = [
+        "Wikipedia Text Extraction Comparison",
+        "",
+        f"Extracts API characters: {len(extracts_text)}",
+        f"HTML parser characters: {len(html_text)}",
+        f"Character mismatch: {abs(len(extracts_text) - len(html_text))}",
+        f"Extracts API lines: {len(extracts_lines)}",
+        f"HTML parser lines: {len(html_lines)}",
+        f"Line mismatch: {abs(len(extracts_lines) - len(html_lines))}",
+        f"Exact match: {extracts_text == html_text}",
+        "",
+        "Unified Diff:",
+        "",
+    ]
+    report.extend(diff or ["No mismatch found."])
+    return "\n".join(report).strip()
 
 
 def build_parser() -> argparse.ArgumentParser:

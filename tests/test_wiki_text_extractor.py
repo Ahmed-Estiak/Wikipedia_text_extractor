@@ -115,9 +115,9 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertIn("Article body.", cleaned)
         self.assertIn("Notes", cleaned)
-        self.assertIn("This note should remain.", cleaned)
-        self.assertIn("Another note should remain.", cleaned)
-        self.assertIn("No-space note should remain.", cleaned)
+        self.assertIn("a. b. This note should remain.", cleaned)
+        self.assertIn("c. Another note should remain.", cleaned)
+        self.assertIn("a. b. No-space note should remain.", cleaned)
         self.assertNotIn("^ a b", cleaned)
         self.assertNotIn("^c", cleaned)
         self.assertNotIn("^a^b", cleaned)
@@ -146,7 +146,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertIn("Article body.", cleaned)
         self.assertIn("Notes", cleaned)
-        self.assertIn("Visible note.", cleaned)
+        self.assertIn("a. b. Visible note.", cleaned)
         self.assertNotIn("Hidden related page.", cleaned)
         self.assertNotIn("Hidden reference.", cleaned)
 

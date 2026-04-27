@@ -12,6 +12,7 @@ from wiki_text_extractor import (
     runtime_output_path,
     extract_note_section,
     note_section_has_body,
+    remove_empty_note_section,
 )
 
 
@@ -153,6 +154,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
     def test_note_section_helpers_detect_missing_body_and_keep_list_labels(self):
         self.assertFalse(note_section_has_body("Article body.\n\nNote"))
         self.assertTrue(note_section_has_body("Article body.\n\nNote\n\na. Visible note."))
+        self.assertEqual(remove_empty_note_section("Article body.\n\nNote"), "Article body.")
         self.assertEqual(
             extract_note_section("Article body.\n\nNote\n\na. Visible note.\n\nb. Other note."),
             "Note\n\na. Visible note.\n\nb. Other note.",

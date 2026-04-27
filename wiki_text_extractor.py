@@ -497,21 +497,15 @@ def note_section_has_body(text: str) -> bool:
     return len(lines) > 1
 
 
-def extract_text_from_extracts_api(page: PageRequest, math_mode: str = "remove") -> str:
-    text = clean_plain_text(fetch_page_extract(page), math_mode)
+def remove_empty_note_section(text: str) -> str:
     if note_section_has_body(text):
         return text
+    return re.sub(r"\n{0,2}(Note|Notes)\s*$", "", text, flags=re.IGNORECASE).strip()
 
-    html_note_section = extract_note_section(
-        clean_wikipedia_html(fetch_page_html(page), math_mode)
-    )
-    if not html_note_section:
-        return text
 
-    without_empty_note = re.sub(
-        r"\n{0,2}(Note|Notes)\s*$", "", text, flags=re.IGNORECASE
-    ).strip()
-    return f"{without_empty_note}\n\n{html_note_section}".strip()
+def extract_text_from_extracts_api(page: PageRequest, math_mode: str = "remove") -> str:
+    text = clean_plain_text(fetch_page_extract(page), math_mode)
+    return remove_empty_note_section(text)
 
 
 

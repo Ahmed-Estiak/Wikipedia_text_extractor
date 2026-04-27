@@ -109,7 +109,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         d
         N
         {\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},}
-        which yields:
+        which yields:N∝D1−q+a constant.
         a constant.
         {\\displaystyle N\\propto D^{1-q}+{\\text{a constant}}.}
         """
@@ -119,6 +119,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("${\\frac {dN}{dD}}\\propto D^{-q}$", cleaned)
         self.assertIn("$N\\propto D^{1-q}+{\\mathrm{a constant}}$", cleaned)
         self.assertIn("which yields:", cleaned)
+        self.assertNotIn("N∝D1−q+a constant", cleaned)
         self.assertNotIn("$which yields", cleaned)
         self.assertNotIn("\nd\nN", cleaned)
         self.assertNotIn("a constant.", cleaned)

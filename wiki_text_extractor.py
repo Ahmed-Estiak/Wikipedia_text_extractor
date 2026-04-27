@@ -259,11 +259,18 @@ def line_looks_like_rendered_math(line: str) -> bool:
 
 
 def clean_latex_context_segment(segment: str) -> str:
-    lines = [
-        line.strip()
-        for line in segment.splitlines()
-        if line.strip() and not line_looks_like_rendered_math(line)
-    ]
+    lines: list[str] = []
+    for line in segment.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if ":" in stripped:
+            prefix, suffix = stripped.split(":", 1)
+            if suffix and line_looks_like_rendered_math(suffix):
+                lines.append(f"{prefix}:")
+                continue
+        if not line_looks_like_rendered_math(stripped):
+            lines.append(stripped)
     return "\n".join(lines)
 
 

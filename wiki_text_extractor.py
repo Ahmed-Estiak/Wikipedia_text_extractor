@@ -165,13 +165,21 @@ class WikipediaTextParser(HTMLParser):
             group = attr_map.get("data-mw-group", "")
             if group == "lower-alpha" and "references" in classes:
                 self._list_stack.append({"style": "lower-alpha", "index": 0})
+            else:
+                start = attr_map.get("start", "1")
+                start_index = int(start) - 1 if start.isdigit() else 0
+                self._list_stack.append({"style": "decimal", "index": start_index})
 
         if tag == "li" and self._list_stack and self._skip_section_level is None:
             current_list = self._list_stack[-1]
-            if current_list["style"] == "lower-alpha":
+            if current_list["style"] in {"decimal", "lower-alpha"}:
                 current_list["index"] = int(current_list["index"]) + 1
                 self._add_break()
-                self._pending_prefix = f"{lower_alpha_label(int(current_list['index']))}. "
+                if current_list["style"] == "lower-alpha":
+                    label = lower_alpha_label(int(current_list["index"]))
+                else:
+                    label = str(current_list["index"])
+                self._pending_prefix = f"{label}. "
 
         if tag == "sup":
             if classes.intersection(self.SKIP_CLASSES) or "reference" in classes:

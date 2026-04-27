@@ -252,6 +252,30 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Article body.\n\n== Largest KBOs ==\n\nSection body.", cleaned)
         self.assertIn("Section body.\n\n== Discovery ==\n\nSubsection body.", cleaned)
 
+    def test_html_parser_generates_decimal_ordered_list_labels(self):
+        html = """
+        <div class="mw-parser-output">
+          <p>In order of discovery, these bodies are:</p>
+          <ol>
+            <li>Ceres</li>
+            <li>Pluto</li>
+            <li>Eris</li>
+          </ol>
+          <ol start="4">
+            <li>Haumea</li>
+            <li>Makemake</li>
+          </ol>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html)
+
+        self.assertIn("1. Ceres", cleaned)
+        self.assertIn("2. Pluto", cleaned)
+        self.assertIn("3. Eris", cleaned)
+        self.assertIn("4. Haumea", cleaned)
+        self.assertIn("5. Makemake", cleaned)
+
     def test_html_parser_generates_lower_alpha_note_labels(self):
         html = """
         <div class="mw-parser-output">

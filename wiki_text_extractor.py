@@ -239,14 +239,16 @@ def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
     return bool(MATH_SYMBOL_PATTERN.search(stripped))
 
 
-def find_displaystyle_latex(paragraph: str) -> list[str]:
-    expressions: list[str] = []
+def replace_displaystyle_latex(paragraph: str, math_mode: str) -> tuple[str, bool]:
+    parts: list[str] = []
     marker = r"{\displaystyle"
     start = 0
+    found = False
     while True:
         marker_index = paragraph.find(marker, start)
         if marker_index == -1:
-            return expressions
+            parts.append(paragraph[start:])
+            return "".join(parts), found
 
         depth = 0
         end_index = None
@@ -261,10 +263,14 @@ def find_displaystyle_latex(paragraph: str) -> list[str]:
                     break
 
         if end_index is None:
-            return expressions
+            parts.append(paragraph[start:])
+            return "".join(parts), found
 
+        found = True
+        parts.append(paragraph[start:marker_index])
         latex = paragraph[marker_index + len(marker) : end_index]
-        expressions.append(latex.strip())
+        if math_mode == "latex":
+            parts.append(f"${normalize_latex(latex)}$")
         start = end_index + 1
 
 
@@ -277,15 +283,8 @@ def clean_math(text: str, math_mode: str) -> str:
     paragraphs = re.split(r"\n{2,}", text)
     cleaned: list[str] = []
     for paragraph in paragraphs:
-        latex_expressions = find_displaystyle_latex(paragraph)
-        if latex_expressions:
-            if math_mode == "latex":
-                latex_parts = [
-                    f"${normalize_latex(expression)}$"
-                    for expression in latex_expressions
-                ]
-                if latex_parts:
-                    cleaned.append(" ".join(latex_parts))
+        paragraph, had_latex = replace_displaystyle_latex(paragraph, math_mode)
+        if had_latex and not paragraph.strip():
             continue
         if paragraph_looks_like_math_fragment(paragraph):
             continue

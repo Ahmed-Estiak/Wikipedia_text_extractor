@@ -48,6 +48,33 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "There are 8 (=2^3) examples at 90°.",
         )
 
+    def test_preserves_non_math_subscripts_with_underscores(self):
+        html = """
+        <div class="mw-parser-output">
+          <p>Water is H<sub>2</sub>O and hydrogen sulfide is H<sub>2</sub>S.</p>
+          <p>The isotope is C<sub>14</sub> gas.</p>
+        </div>
+        """
+
+        self.assertEqual(
+            clean_wikipedia_html(html),
+            "Water is H_2_O and hydrogen sulfide is H_2_S.\n\nThe isotope is C_14 gas.",
+        )
+
+    def test_does_not_add_subscript_underscores_inside_math_html(self):
+        html = """
+        <div class="mw-parser-output">
+          <span class="mwe-math-element">x<sub>i</sub></span>
+          <p>Water is H<sub>2</sub>O.</p>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html, math_mode="keep")
+
+        self.assertIn("xi", cleaned)
+        self.assertNotIn("x_i", cleaned)
+        self.assertIn("H_2_O", cleaned)
+
     def test_removes_image_captions_and_map_labels(self):
         html = """
         <div class="mw-parser-output">

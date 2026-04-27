@@ -111,12 +111,23 @@ class WikipediaTextParser(HTMLParser):
     SKIP_IDS = {
         "Further_reading",
     }
+    MATH_CLASSES = {
+        "mwe-math-element",
+        "mwe-math-fallback-image-display",
+        "mwe-math-fallback-image-inline",
+        "mwe-math-mathml-display",
+        "mwe-math-mathml-inline",
+    }
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
         self._skip_depth = 0
         self._sup_depth = 0
+        self._sub_depth = 0
+        self._pending_subscript_separator = False
+        self._math_depth = 0
+        self._math_tag_stack: list[str] = []
         self._heading_level: int | None = None
         self._heading_buffer: list[str] | None = None
         self._skip_section_level: int | None = None
@@ -128,6 +139,10 @@ class WikipediaTextParser(HTMLParser):
         classes = set(attr_map.get("class", "").split())
         element_id = attr_map.get("id", "")
         heading_level = int(tag[1]) if re.fullmatch(r"h[1-6]", tag) else None
+        in_math = tag == "math" or bool(classes.intersection(self.MATH_CLASSES))
+        if in_math:
+            self._math_depth += 1
+            self._math_tag_stack.append(tag)
 
         if heading_level is not None:
             if self._skip_section_level is not None and heading_level <= self._skip_section_level:
@@ -164,6 +179,12 @@ class WikipediaTextParser(HTMLParser):
                 self._parts.append("^")
             return
 
+        if tag == "sub":
+            if not self._math_depth:
+                self._sub_depth += 1
+                self._append_inline_marker("_")
+            return
+
         if (
             self._skip_depth
             or tag in self.SKIP_TAGS
@@ -184,6 +205,7 @@ class WikipediaTextParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if self._skip_depth:
             self._skip_depth -= 1
+            self._close_math_tag(tag)
             return
 
         if tag == "ol" and self._list_stack:
@@ -198,6 +220,17 @@ class WikipediaTextParser(HTMLParser):
             self._sup_depth -= 1
             return
 
+        if tag == "sub":
+            if self._sub_depth:
+                self._sub_depth -= 1
+                if not self._sub_depth:
+                    self._pending_subscript_separator = True
+            self._close_math_tag(tag)
+            return
+
+        if self._close_math_tag(tag):
+            return
+
         if tag in self.BLOCK_TAGS:
             self._add_break()
 
@@ -205,14 +238,20 @@ class WikipediaTextParser(HTMLParser):
         if self._skip_depth or self._skip_section_level is not None:
             return
         text = re.sub(r"\s+", " ", data)
-        if text.strip():
-            if self._heading_buffer is not None:
-                self._heading_buffer.append(text)
-                return
-            if self._pending_prefix:
-                text = self._pending_prefix + text.lstrip()
-                self._pending_prefix = ""
-            self._parts.append(text)
+        if not text.strip():
+            self._pending_subscript_separator = False
+            return
+        if self._pending_subscript_separator:
+            if text[0].isalpha():
+                text = "_" + text
+            self._pending_subscript_separator = False
+        if self._heading_buffer is not None:
+            self._heading_buffer.append(text)
+            return
+        if self._pending_prefix:
+            text = self._pending_prefix + text.lstrip()
+            self._pending_prefix = ""
+        self._parts.append(text)
 
     def get_text(self) -> str:
         text = "".join(self._parts)
@@ -223,6 +262,7 @@ class WikipediaTextParser(HTMLParser):
         return text.strip()
 
     def _add_break(self) -> None:
+        self._pending_subscript_separator = False
         if not self._parts:
             return
         last = self._parts[-1]
@@ -243,6 +283,19 @@ class WikipediaTextParser(HTMLParser):
         self._add_break()
         self._parts.append(f"== {heading} ==")
         self._add_break()
+
+    def _append_inline_marker(self, marker: str) -> None:
+        if self._heading_buffer is not None:
+            self._heading_buffer.append(marker)
+            return
+        self._parts.append(marker)
+
+    def _close_math_tag(self, tag: str) -> bool:
+        if self._math_tag_stack and self._math_tag_stack[-1] == tag:
+            self._math_tag_stack.pop()
+            self._math_depth -= 1
+            return True
+        return False
 
 
 def page_request_from_url(url: str) -> PageRequest:

@@ -81,6 +81,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         It has 8 (=23) rings.[2, 3]
 
+        === Moons ===
+
+        Titan is large.
+
         == References ==
 
         Reference text that should not be included.
@@ -88,7 +92,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(
             clean_plain_text(text),
-            "Saturn is a planet.\nHistory\nIt has 8 (=2^3) rings.",
+            (
+                "Saturn is a planet.\n\n== History ==\n\n"
+                "It has 8 (=2^3) rings.\n\n== Moons ==\n\nTitan is large."
+            ),
         )
 
     def test_removes_selected_sections_but_keeps_notes(self):
@@ -117,7 +124,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         cleaned = clean_plain_text(text)
 
         self.assertIn("Article body.", cleaned)
-        self.assertIn("Notes", cleaned)
+        self.assertIn("== Notes ==", cleaned)
         self.assertIn("This note should remain.", cleaned)
         self.assertIn("Another note should remain.", cleaned)
         self.assertIn("No-space note should remain.", cleaned)
@@ -155,11 +162,12 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
     def test_note_section_helpers_detect_missing_body_and_keep_list_labels(self):
         self.assertFalse(note_section_has_body("Article body.\n\nNote"))
-        self.assertTrue(note_section_has_body("Article body.\n\nNote\n\na. Visible note."))
-        self.assertEqual(remove_empty_note_section("Article body.\n\nNote"), "Article body.")
+        self.assertFalse(note_section_has_body("Article body.\n\n== Note =="))
+        self.assertTrue(note_section_has_body("Article body.\n\n== Note ==\n\na. Visible note."))
+        self.assertEqual(remove_empty_note_section("Article body.\n\n== Note =="), "Article body.")
         self.assertEqual(
-            extract_note_section("Article body.\n\nNote\n\na. Visible note.\n\nb. Other note."),
-            "Note\n\na. Visible note.\n\nb. Other note.",
+            extract_note_section("Article body.\n\n== Note ==\n\na. Visible note.\n\nb. Other note."),
+            "== Note ==\n\na. Visible note.\n\nb. Other note.",
         )
 
     def test_html_parser_removes_section_content_by_heading_id(self):
@@ -178,10 +186,26 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         cleaned = clean_wikipedia_html(html)
 
         self.assertIn("Article body.", cleaned)
-        self.assertIn("Note", cleaned)
+        self.assertIn("== Note ==", cleaned)
         self.assertIn("a. Visible note stays.", cleaned)
         self.assertNotIn("Hidden related page", cleaned)
         self.assertNotIn("Hidden reference.", cleaned)
+
+    def test_html_parser_formats_any_heading_level(self):
+        html = """
+        <div class="mw-parser-output">
+          <p>Article body.</p>
+          <h2>Largest KBOs</h2>
+          <p>Section body.</p>
+          <h3>Discovery</h3>
+          <p>Subsection body.</p>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html)
+
+        self.assertIn("Article body.\n\n== Largest KBOs ==\n\nSection body.", cleaned)
+        self.assertIn("Section body.\n\n== Discovery ==\n\nSubsection body.", cleaned)
 
     def test_html_parser_generates_lower_alpha_note_labels(self):
         html = """

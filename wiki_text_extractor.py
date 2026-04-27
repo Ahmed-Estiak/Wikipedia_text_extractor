@@ -118,6 +118,7 @@ class WikipediaTextParser(HTMLParser):
         self._skip_depth = 0
         self._sup_depth = 0
         self._heading_level: int | None = None
+        self._heading_buffer: list[str] | None = None
         self._skip_section_level: int | None = None
         self._list_stack: list[dict[str, int | str]] = []
         self._pending_prefix = ""
@@ -135,6 +136,7 @@ class WikipediaTextParser(HTMLParser):
 
         if self._heading_level is not None and element_id in REMOVED_SECTION_IDS:
             self._skip_section_level = self._heading_level
+            self._heading_buffer = None
             self._skip_depth += 1
             return
 
@@ -171,6 +173,11 @@ class WikipediaTextParser(HTMLParser):
             self._skip_depth += 1
             return
 
+        if heading_level is not None:
+            self._add_break()
+            self._heading_buffer = []
+            return
+
         if tag in self.BLOCK_TAGS:
             self._add_break()
 
@@ -183,7 +190,9 @@ class WikipediaTextParser(HTMLParser):
             self._list_stack.pop()
 
         if re.fullmatch(r"h[1-6]", tag):
+            self._flush_heading()
             self._heading_level = None
+            return
 
         if tag == "sup" and self._sup_depth:
             self._sup_depth -= 1
@@ -197,6 +206,9 @@ class WikipediaTextParser(HTMLParser):
             return
         text = re.sub(r"\s+", " ", data)
         if text.strip():
+            if self._heading_buffer is not None:
+                self._heading_buffer.append(text)
+                return
             if self._pending_prefix:
                 text = self._pending_prefix + text.lstrip()
                 self._pending_prefix = ""
@@ -220,6 +232,17 @@ class WikipediaTextParser(HTMLParser):
             self._parts[-1] = last + "\n"
             return
         self._parts.append("\n\n")
+
+    def _flush_heading(self) -> None:
+        if self._heading_buffer is None:
+            return
+        heading = re.sub(r"\s+", " ", "".join(self._heading_buffer)).strip()
+        self._heading_buffer = None
+        if not heading:
+            return
+        self._add_break()
+        self._parts.append(f"== {heading} ==")
+        self._add_break()
 
 
 def page_request_from_url(url: str) -> PageRequest:
@@ -368,9 +391,45 @@ def clean_leading_caret_markers(text: str) -> str:
     return "\n".join(cleaned_lines)
 
 
+def normalize_section_headings(text: str) -> str:
+    lines: list[str] = []
+    for line in text.splitlines():
+        heading = SECTION_HEADING_PATTERN.match(line)
+        if heading:
+            lines.append(f"== {heading.group(2).strip()} ==")
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def section_title_from_line(line: str) -> str:
+    heading = SECTION_HEADING_PATTERN.match(line)
+    if heading:
+        return heading.group(2).strip().casefold()
+    return line.strip().casefold()
+
+
+def format_heading_spacing(text: str) -> str:
+    lines = text.splitlines()
+    formatted: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if re.fullmatch(r"==\s+.+?\s+==", stripped):
+            while formatted and formatted[-1] == "":
+                formatted.pop()
+            if formatted:
+                formatted.append("")
+            formatted.append(stripped)
+            continue
+        formatted.append(line)
+    return "\n".join(formatted)
+
+
 def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
     stripped = paragraph.strip()
     if not stripped:
+        return False
+    if SECTION_HEADING_PATTERN.match(stripped):
         return False
     if len(stripped) <= 2 and re.match(r"^[A-Za-z0-9]+$", stripped):
         return True
@@ -378,6 +437,8 @@ def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
         return True
     if stripped == "a constant.":
         return True
+    if len(re.findall(r"\b[A-Za-z]{3,}\b", stripped)) >= 2:
+        return False
     if len(re.findall(r"[A-Za-z]{2,}", stripped)) >= 4:
         return False
     if len(stripped) > 120:
@@ -487,7 +548,7 @@ def clean_plain_text(text: str, math_mode: str = "remove") -> str:
     text = remove_unwanted_sections(text)
     text = clean_leading_caret_markers(text)
     text = INLINE_REFERENCE_PATTERN.sub("", text)
-    text = re.sub(r"^\s*=+\s*(.*?)\s*=+\s*$", r"\1", text, flags=re.MULTILINE)
+    text = normalize_section_headings(text)
     text = clean_math(text, math_mode)
     text = repair_compact_power_notation(text)
     text = EMPTY_PARENTHESES_PATTERN.sub("", text)
@@ -496,6 +557,7 @@ def clean_plain_text(text: str, math_mode: str = "remove") -> str:
     text = re.sub(r"\n[ \t]+", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = format_heading_spacing(text)
     return text.strip()
 
 
@@ -509,7 +571,7 @@ def clean_wikipedia_html(html: str, math_mode: str = "remove") -> str:
 def extract_note_section(text: str) -> str:
     lines = text.splitlines()
     for index, line in enumerate(lines):
-        if line.strip().casefold() in {"note", "notes"}:
+        if section_title_from_line(line) in {"note", "notes"}:
             return "\n".join(lines[index:]).strip()
     return ""
 
@@ -525,7 +587,12 @@ def note_section_has_body(text: str) -> bool:
 def remove_empty_note_section(text: str) -> str:
     if note_section_has_body(text):
         return text
-    return re.sub(r"\n{0,2}(Note|Notes)\s*$", "", text, flags=re.IGNORECASE).strip()
+    return re.sub(
+        r"\n{0,2}(?:==\s*)?(Note|Notes)(?:\s*==)?\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 def extract_text_from_extracts_api(page: PageRequest, math_mode: str = "remove") -> str:

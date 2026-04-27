@@ -22,12 +22,14 @@ USER_AGENT = "WikipediaTextExtractor/0.1"
 EXTRACTION_METHODS = ("extracts", "html")
 MATH_MODES = ("remove", "latex", "keep")
 TAIL_SECTION_PATTERN = re.compile(
-    r"\n\s*==\s*(See also|References|External links|Further reading|Notes)\s*==[\s\S]*$",
+    r"\n[ \t]*==[ \t]*(See also|References|External links|Further reading|Notes)[ \t]*==[\s\S]*$",
     re.IGNORECASE,
 )
 INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
 MATH_FRAGMENT_PATTERN = re.compile(r"^[\sA-Za-z0-9+\-–−=∝×*/^().,{}\\]+$")
 MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
+EMPTY_PARENTHESES_PATTERN = re.compile(r"\s*\(\s*\)")
+POWER_HINT_PATTERN = re.compile(r"(?P<value>\b\d+)\s+\(=(?P<compact>\d{2,6})\)")
 LANGUAGE_FOLDER_NAMES = {
     "bn": "Bangla",
     "en": "English",
@@ -76,7 +78,7 @@ class WikipediaTextParser(HTMLParser):
         "tr",
         "ul",
     }
-    SKIP_TAGS = {"script", "style", "table", "sup"}
+    SKIP_TAGS = {"script", "style", "table"}
     SKIP_CLASSES = {
         "ambox",
         "asbox",
@@ -106,11 +108,20 @@ class WikipediaTextParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
         self._skip_depth = 0
+        self._sup_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {name: value or "" for name, value in attrs}
         classes = set(attr_map.get("class", "").split())
         element_id = attr_map.get("id", "")
+
+        if tag == "sup":
+            if classes.intersection(self.SKIP_CLASSES) or "reference" in classes:
+                self._skip_depth += 1
+            else:
+                self._sup_depth += 1
+                self._parts.append("^")
+            return
 
         if (
             self._skip_depth
@@ -127,6 +138,10 @@ class WikipediaTextParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if self._skip_depth:
             self._skip_depth -= 1
+            return
+
+        if tag == "sup" and self._sup_depth:
+            self._sup_depth -= 1
             return
 
         if tag in self.BLOCK_TAGS:
@@ -226,6 +241,20 @@ def normalize_latex(latex: str) -> str:
     return latex.strip().rstrip(",.;:")
 
 
+def repair_compact_power_notation(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        value = int(match.group("value"))
+        compact = match.group("compact")
+        for split_at in range(1, len(compact)):
+            base = int(compact[:split_at])
+            exponent = int(compact[split_at:])
+            if exponent > 1 and base**exponent == value:
+                return f"{value} (={base}^{exponent})"
+        return match.group(0)
+
+    return POWER_HINT_PATTERN.sub(replace, text)
+
+
 def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
     stripped = paragraph.strip()
     if not stripped:
@@ -236,6 +265,8 @@ def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
         return True
     if stripped == "a constant.":
         return True
+    if len(re.findall(r"[A-Za-z]{2,}", stripped)) >= 4:
+        return False
     if len(stripped) > 120:
         return False
     if not MATH_FRAGMENT_PATTERN.match(stripped):
@@ -344,6 +375,8 @@ def clean_plain_text(text: str, math_mode: str = "remove") -> str:
     text = INLINE_REFERENCE_PATTERN.sub("", text)
     text = re.sub(r"^\s*=+\s*(.*?)\s*=+\s*$", r"\1", text, flags=re.MULTILINE)
     text = clean_math(text, math_mode)
+    text = repair_compact_power_notation(text)
+    text = EMPTY_PARENTHESES_PATTERN.sub("", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n[ \t]+", "\n", text)

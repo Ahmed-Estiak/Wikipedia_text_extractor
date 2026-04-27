@@ -31,6 +31,18 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "Python is a programming language.\n\nIt emphasizes readability.",
         )
 
+    def test_preserves_non_reference_superscripts(self):
+        html = """
+        <div class="mw-parser-output">
+          <p>There are 8 (=2<sup>3</sup>) examples at 90&deg;.</p>
+        </div>
+        """
+
+        self.assertEqual(
+            clean_wikipedia_html(html),
+            "There are 8 (=2^3) examples at 90°.",
+        )
+
     def test_extracts_language_and_title_from_url(self):
         page = page_request_from_url("https://en.wikipedia.org/wiki/Albert_Einstein")
 
@@ -39,11 +51,11 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
     def test_cleans_extracts_api_plain_text_noise(self):
         text = """
-        Saturn is a planet.[1]
+        Saturn ( ) is a planet.[1]
 
         == History ==
 
-        It has rings.[2, 3]
+        It has 8 (=23) rings.[2, 3]
 
         == References ==
 
@@ -52,7 +64,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(
             clean_plain_text(text),
-            "Saturn is a planet.\nHistory\nIt has rings.",
+            "Saturn is a planet.\nHistory\nIt has 8 (=2^3) rings.",
         )
 
     def test_output_path_for_both_methods_adds_method_suffix(self):
@@ -84,42 +96,41 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("+Line three", report)
 
     def test_math_remove_drops_displaystyle_and_fragments(self):
-        text = """
-        The objects follow this relation:
-
-        d
-
-        D
-
-        ∝
-
-        {\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},}
-
-        Normal text remains.
-        """
+        text = "\n\n".join(
+            [
+                "The objects follow this relation:",
+                "d",
+                "D",
+                "\u221d",
+                "{\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},}",
+                "Normal text remains.",
+            ]
+        )
 
         cleaned = clean_plain_text(text, math_mode="remove")
 
         self.assertEqual(cleaned, "The objects follow this relation:\n\nNormal text remains.")
 
     def test_math_latex_keeps_clean_latex(self):
-        text = """
-        The objects follow this relation:
-
-        d
-        N
-        {\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},}
-        which yields:N∝D1−q+a constant.
-        a constant.
-        {\\displaystyle N\\propto D^{1-q}+{\\text{a constant}}.}
-        """
+        text = "\n".join(
+            [
+                "The objects follow this relation:",
+                "",
+                "d",
+                "N",
+                "{\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},}",
+                "which yields:N\u221dD1\u2212q+a constant.",
+                "a constant.",
+                "{\\displaystyle N\\propto D^{1-q}+{\\text{a constant}}.}",
+            ]
+        )
 
         cleaned = clean_plain_text(text, math_mode="latex")
 
         self.assertIn("${\\frac {dN}{dD}}\\propto D^{-q}$", cleaned)
         self.assertIn("$N\\propto D^{1-q}+{\\mathrm{a constant}}$", cleaned)
         self.assertIn("which yields:", cleaned)
-        self.assertNotIn("N∝D1−q+a constant", cleaned)
+        self.assertNotIn("N\u221dD1\u2212q+a constant", cleaned)
         self.assertNotIn("$which yields", cleaned)
         self.assertNotIn("\nd\nN", cleaned)
         self.assertNotIn("a constant.", cleaned)

@@ -48,6 +48,24 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "There are 8 (=2^3) examples at 90°.",
         )
 
+    def test_preserves_space_after_removed_reference_superscripts(self):
+        html = """
+        <div class="mw-parser-output">
+          <p>That suggests not many are.<sup class="reference">[1]</sup> Orcus follows.</p>
+          <p>Accepted: Pluto,<sup class="reference">[2]</sup> Haumea, Máni,<sup class="reference">[3]</sup> Aya.</p>
+          <p>This spacing <sup class="reference">[4]</sup> already existed.</p>
+        </div>
+        """
+
+        self.assertEqual(
+            clean_wikipedia_html(html),
+            (
+                "That suggests not many are. Orcus follows.\n\n"
+                "Accepted: Pluto, Haumea, Máni, Aya.\n\n"
+                "This spacing already existed."
+            ),
+        )
+
     def test_preserves_non_math_subscripts_with_underscores(self):
         html = """
         <div class="mw-parser-output">

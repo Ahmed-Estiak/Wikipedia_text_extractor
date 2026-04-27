@@ -125,6 +125,8 @@ class WikipediaTextParser(HTMLParser):
         self._skip_depth = 0
         self._sup_depth = 0
         self._sub_depth = 0
+        self._reference_skip_depth = 0
+        self._pending_reference_separator = False
         self._pending_subscript_separator = False
         self._math_depth = 0
         self._math_tag_stack: list[str] = []
@@ -174,6 +176,8 @@ class WikipediaTextParser(HTMLParser):
         if tag == "sup":
             if classes.intersection(self.SKIP_CLASSES) or "reference" in classes:
                 self._skip_depth += 1
+                if "reference" in classes:
+                    self._reference_skip_depth += 1
             else:
                 self._sup_depth += 1
                 self._parts.append("^")
@@ -205,6 +209,9 @@ class WikipediaTextParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if self._skip_depth:
             self._skip_depth -= 1
+            if tag == "sup" and self._reference_skip_depth:
+                self._reference_skip_depth -= 1
+                self._pending_reference_separator = True
             self._close_math_tag(tag)
             return
 
@@ -239,8 +246,12 @@ class WikipediaTextParser(HTMLParser):
             return
         text = re.sub(r"\s+", " ", data)
         if not text.strip():
+            if self._pending_reference_separator:
+                self._append_pending_space()
+                self._pending_reference_separator = False
             self._pending_subscript_separator = False
             return
+        self._pending_reference_separator = False
         if self._pending_subscript_separator:
             if text[0].isalpha():
                 text = "_" + text
@@ -262,6 +273,7 @@ class WikipediaTextParser(HTMLParser):
         return text.strip()
 
     def _add_break(self) -> None:
+        self._pending_reference_separator = False
         self._pending_subscript_separator = False
         if not self._parts:
             return
@@ -289,6 +301,15 @@ class WikipediaTextParser(HTMLParser):
             self._heading_buffer.append(marker)
             return
         self._parts.append(marker)
+
+    def _append_pending_space(self) -> None:
+        target = self._heading_buffer if self._heading_buffer is not None else self._parts
+        if not target:
+            return
+        last = target[-1]
+        if last.endswith((" ", "\n")):
+            return
+        target.append(" ")
 
     def _close_math_tag(self, tag: str) -> bool:
         if self._math_tag_stack and self._math_tag_stack[-1] == tag:

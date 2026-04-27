@@ -14,6 +14,7 @@ from wiki_text_extractor import (
     note_section_has_body,
     remove_empty_note_section,
     raw_output_path,
+    lower_alpha_label,
 )
 
 
@@ -181,6 +182,30 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("a. Visible note stays.", cleaned)
         self.assertNotIn("Hidden related page", cleaned)
         self.assertNotIn("Hidden reference.", cleaned)
+
+    def test_html_parser_generates_lower_alpha_note_labels(self):
+        html = """
+        <div class="mw-parser-output">
+          <div class="mw-heading mw-heading2"><h2 id="Note">Note</h2></div>
+          <ol class="references" data-mw-group="lower-alpha">
+            <li><span class="mw-cite-backlink">^ a b</span>
+              <span class="reference-text">First note.</span></li>
+            <li><span class="mw-cite-backlink">^ c</span>
+              <span class="reference-text">Second note.</span></li>
+          </ol>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html)
+
+        self.assertIn("a. First note.", cleaned)
+        self.assertIn("b. Second note.", cleaned)
+        self.assertNotIn("^", cleaned)
+
+    def test_lower_alpha_label_handles_multiple_letters(self):
+        self.assertEqual(lower_alpha_label(1), "a")
+        self.assertEqual(lower_alpha_label(26), "z")
+        self.assertEqual(lower_alpha_label(27), "aa")
 
     def test_output_path_for_both_methods_adds_method_suffix(self):
         path = output_path_for_method("output/saturn.txt", "html", split_methods=True)

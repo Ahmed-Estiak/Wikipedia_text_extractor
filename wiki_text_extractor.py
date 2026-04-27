@@ -91,6 +91,7 @@ class WikipediaTextParser(HTMLParser):
         "imagemap",
         "locmap",
         "metadata",
+        "mw-cite-backlink",
         "mw-file-description",
         "mw-kartographer-map",
         "mw-editsection",
@@ -118,6 +119,8 @@ class WikipediaTextParser(HTMLParser):
         self._sup_depth = 0
         self._heading_level: int | None = None
         self._skip_section_level: int | None = None
+        self._list_stack: list[dict[str, int | str]] = []
+        self._pending_prefix = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {name: value or "" for name, value in attrs}
@@ -134,6 +137,22 @@ class WikipediaTextParser(HTMLParser):
             self._skip_section_level = self._heading_level
             self._skip_depth += 1
             return
+
+        if self._skip_depth:
+            self._skip_depth += 1
+            return
+
+        if tag == "ol":
+            group = attr_map.get("data-mw-group", "")
+            if group == "lower-alpha" and "references" in classes:
+                self._list_stack.append({"style": "lower-alpha", "index": 0})
+
+        if tag == "li" and self._list_stack and self._skip_section_level is None:
+            current_list = self._list_stack[-1]
+            if current_list["style"] == "lower-alpha":
+                current_list["index"] = int(current_list["index"]) + 1
+                self._add_break()
+                self._pending_prefix = f"{lower_alpha_label(int(current_list['index']))}. "
 
         if tag == "sup":
             if classes.intersection(self.SKIP_CLASSES) or "reference" in classes:
@@ -160,6 +179,9 @@ class WikipediaTextParser(HTMLParser):
             self._skip_depth -= 1
             return
 
+        if tag == "ol" and self._list_stack:
+            self._list_stack.pop()
+
         if re.fullmatch(r"h[1-6]", tag):
             self._heading_level = None
 
@@ -175,6 +197,9 @@ class WikipediaTextParser(HTMLParser):
             return
         text = re.sub(r"\s+", " ", data)
         if text.strip():
+            if self._pending_prefix:
+                text = self._pending_prefix + text.lstrip()
+                self._pending_prefix = ""
             self._parts.append(text)
 
     def get_text(self) -> str:
@@ -276,6 +301,15 @@ def repair_compact_power_notation(text: str) -> str:
         return match.group(0)
 
     return POWER_HINT_PATTERN.sub(replace, text)
+
+
+def lower_alpha_label(index: int) -> str:
+    label = ""
+    while index > 0:
+        index -= 1
+        label = chr(ord("a") + index % 26) + label
+        index //= 26
+    return label
 
 
 def remove_unwanted_sections(text: str) -> str:

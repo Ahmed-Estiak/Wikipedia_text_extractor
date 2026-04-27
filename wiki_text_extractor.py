@@ -232,11 +232,39 @@ def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
         return False
     if len(stripped) <= 2 and re.match(r"^[A-Za-z0-9]+$", stripped):
         return True
+    if len(stripped) <= 40 and "\n" in stripped and re.match(r"^[A-Za-z0-9\s.]+$", stripped):
+        return True
+    if stripped == "a constant.":
+        return True
     if len(stripped) > 120:
         return False
     if not MATH_FRAGMENT_PATTERN.match(stripped):
         return False
     return bool(MATH_SYMBOL_PATTERN.search(stripped))
+
+
+def line_looks_like_rendered_math(line: str) -> bool:
+    stripped = line.strip().rstrip(",.;:")
+    if not stripped:
+        return True
+    if stripped == "a constant":
+        return True
+    if len(stripped) <= 2 and re.match(r"^[A-Za-z0-9]+$", stripped):
+        return True
+    if re.match(r"^[+\-–−=∝×*/^(),.{}\\]+$", stripped):
+        return True
+    if len(stripped) <= 30 and MATH_SYMBOL_PATTERN.search(stripped):
+        return True
+    return False
+
+
+def clean_latex_context_segment(segment: str) -> str:
+    lines = [
+        line.strip()
+        for line in segment.splitlines()
+        if line.strip() and not line_looks_like_rendered_math(line)
+    ]
+    return "\n".join(lines)
 
 
 def replace_displaystyle_latex(paragraph: str, math_mode: str) -> tuple[str, bool]:
@@ -247,7 +275,12 @@ def replace_displaystyle_latex(paragraph: str, math_mode: str) -> tuple[str, boo
     while True:
         marker_index = paragraph.find(marker, start)
         if marker_index == -1:
-            parts.append(paragraph[start:])
+            segment = paragraph[start:]
+            parts.append(
+                clean_latex_context_segment(segment)
+                if found and math_mode == "latex"
+                else segment
+            )
             return "".join(parts), found
 
         depth = 0
@@ -267,10 +300,16 @@ def replace_displaystyle_latex(paragraph: str, math_mode: str) -> tuple[str, boo
             return "".join(parts), found
 
         found = True
-        parts.append(paragraph[start:marker_index])
+        segment = paragraph[start:marker_index]
+        if math_mode == "latex":
+            context = clean_latex_context_segment(segment)
+            if context:
+                parts.append(context)
+                parts.append("\n")
         latex = paragraph[marker_index + len(marker) : end_index]
         if math_mode == "latex":
             parts.append(f"${normalize_latex(latex)}$")
+            parts.append("\n")
         start = end_index + 1
 
 

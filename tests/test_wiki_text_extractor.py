@@ -106,13 +106,22 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         text = """
         The objects follow this relation:
 
-        {\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},} which yields:
+        d
+        N
+        {\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},}
+        which yields:
+        a constant.
+        {\\displaystyle N\\propto D^{1-q}+{\\text{a constant}}.}
         """
 
         cleaned = clean_plain_text(text, math_mode="latex")
 
         self.assertIn("${\\frac {dN}{dD}}\\propto D^{-q}$", cleaned)
+        self.assertIn("$N\\propto D^{1-q}+{\\mathrm{a constant}}$", cleaned)
         self.assertIn("which yields:", cleaned)
+        self.assertNotIn("$which yields", cleaned)
+        self.assertNotIn("\nd\nN", cleaned)
+        self.assertNotIn("a constant.", cleaned)
 
     def test_math_keep_preserves_raw_displaystyle(self):
         text = "{\\displaystyle N\\propto D^{1-q}}"

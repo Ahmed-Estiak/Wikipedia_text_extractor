@@ -19,6 +19,8 @@ from urllib.request import Request, urlopen
 
 API_TEMPLATE = "https://{lang}.wikipedia.org/w/api.php"
 USER_AGENT = "WikipediaTextExtractor/0.1"
+EXTRACTION_METHODS = ("extracts", "html")
+MATH_MODES = ("remove", "latex", "keep")
 TAIL_SECTION_PATTERN = re.compile(
     r"\n\s*==\s*(See also|References|External links|Further reading|Notes)\s*==[\s\S]*$",
     re.IGNORECASE,
@@ -329,6 +331,24 @@ def output_path_for_method(output: str, method: str, split_methods: bool) -> Pat
         return path
     suffix = path.suffix or ".txt"
     return path.with_name(f"{path.stem}_{method}{suffix}")
+
+
+def extraction_output_path(output: str, method: str, math_mode: str) -> Path:
+    path = Path(output)
+    suffix = path.suffix or ".txt"
+    return path.with_name(f"{path.stem}_{method}_{math_mode}{suffix}")
+
+
+def comparison_output_path(output: str) -> Path:
+    path = Path(output)
+    suffix = path.suffix or ".txt"
+    return path.with_name(f"{path.stem}_comparison{suffix}")
+
+
+def runtime_output_path(output: str) -> Path:
+    path = Path(output)
+    suffix = path.suffix or ".txt"
+    return path.with_name(f"{path.stem}_runtime{suffix}")
 
 
 def write_text_file(path: Path, text: str) -> None:

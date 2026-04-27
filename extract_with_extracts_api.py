@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 from typing import Iterable
 
 from wiki_text_extractor import (
     PageRequest,
-    extract_text_from_extracts_api,
+    extraction_output_path,
     page_request_from_url,
+    run_extraction,
+    runtime_output_path,
     write_text_file,
 )
 
@@ -43,13 +44,27 @@ def main(argv: Iterable[str] | None = None) -> int:
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
 
     try:
-        text = extract_text_from_extracts_api(page, args.math)
-        write_text_file(Path(args.output), text)
+        text, seconds = run_extraction(page, "extracts", args.math)
+        output_path = extraction_output_path(args.output, page, "extracts", args.math)
+        runtime_path = runtime_output_path(args.output, page)
+        write_text_file(output_path, text)
+        write_text_file(
+            runtime_path,
+            "\n".join(
+                [
+                    "Wikipedia Text Extraction Runtime",
+                    "",
+                    f"Latest run: extracts API / math {args.math}",
+                    f"Extracts API runtime ({args.math}): {seconds:.3f} seconds",
+                ]
+            ),
+        )
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Saved extracts API text: {args.output}")
+    print(f"Saved extracts API text: {output_path}")
+    print(f"Updated runtime report: {runtime_path}")
     return 0
 
 

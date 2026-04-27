@@ -28,6 +28,11 @@ TAIL_SECTION_PATTERN = re.compile(
 INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
 MATH_FRAGMENT_PATTERN = re.compile(r"^[\sA-Za-z0-9+\-–−=∝×*/^().,{}\\]+$")
 MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
+LANGUAGE_FOLDER_NAMES = {
+    "bn": "Bangla",
+    "en": "English",
+    "fi": "Suomi",
+}
 
 
 @dataclass(frozen=True)
@@ -333,22 +338,44 @@ def output_path_for_method(output: str, method: str, split_methods: bool) -> Pat
     return path.with_name(f"{path.stem}_{method}{suffix}")
 
 
-def extraction_output_path(output: str, method: str, math_mode: str) -> Path:
+def safe_filename_part(value: str) -> str:
+    value = value.strip().replace(" ", "_")
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
+    value = re.sub(r"_+", "_", value)
+    return value.strip("._") or "wikipedia_page"
+
+
+def topic_folder_name(page: PageRequest) -> str:
+    return safe_filename_part(page.title)
+
+
+def topic_file_stem(page: PageRequest) -> str:
+    return topic_folder_name(page).lower()
+
+
+def language_folder_name(lang: str) -> str:
+    return LANGUAGE_FOLDER_NAMES.get(lang.lower(), lang.lower())
+
+
+def output_directory(output: str, page: PageRequest) -> Path:
     path = Path(output)
-    suffix = path.suffix or ".txt"
-    return path.with_name(f"{path.stem}_{method}_{math_mode}{suffix}")
+    root = path.parent if path.suffix else path
+    return root / topic_folder_name(page) / language_folder_name(page.lang)
 
 
-def comparison_output_path(output: str) -> Path:
-    path = Path(output)
-    suffix = path.suffix or ".txt"
-    return path.with_name(f"{path.stem}_comparison{suffix}")
+def extraction_output_path(output: str, page: PageRequest, method: str, math_mode: str) -> Path:
+    suffix = Path(output).suffix or ".txt"
+    return output_directory(output, page) / f"{topic_file_stem(page)}_{method}_{math_mode}{suffix}"
 
 
-def runtime_output_path(output: str) -> Path:
-    path = Path(output)
-    suffix = path.suffix or ".txt"
-    return path.with_name(f"{path.stem}_runtime{suffix}")
+def comparison_output_path(output: str, page: PageRequest) -> Path:
+    suffix = Path(output).suffix or ".txt"
+    return output_directory(output, page) / f"{topic_file_stem(page)}_comparison{suffix}"
+
+
+def runtime_output_path(output: str, page: PageRequest) -> Path:
+    suffix = Path(output).suffix or ".txt"
+    return output_directory(output, page) / f"{topic_file_stem(page)}_runtime{suffix}"
 
 
 def write_text_file(path: Path, text: str) -> None:
@@ -434,9 +461,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 1
 
     if args.output:
-        split_methods = len(results) > 1
         for method, text in results.items():
-            path = output_path_for_method(args.output, method, split_methods)
+            path = extraction_output_path(args.output, page, method, args.math)
             write_text_file(path, text)
             print(f"Saved {method} text: {path}")
     else:

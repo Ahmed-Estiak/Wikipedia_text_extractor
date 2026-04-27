@@ -27,37 +27,45 @@ python .\wiki_text_extractor.py --url "https://en.wikipedia.org/wiki/Bangladesh"
 Run the extracts API method as its own Python file:
 
 ```powershell
-python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Saturn" --output output\saturn_extracts.txt
+python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Saturn" --output output\saturn.txt
 ```
 
 Run the HTML parser method as its own Python file:
 
 ```powershell
-python .\extract_with_html_parser.py --url "https://en.wikipedia.org/wiki/Saturn" --output output\saturn_html.txt
+python .\extract_with_html_parser.py --url "https://en.wikipedia.org/wiki/Saturn" --output output\saturn.txt
 ```
 
 Choose how math equations are handled:
 
 ```powershell
-python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math remove --output output\kuiper_belt_extracts.txt
-python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math latex --output output\kuiper_belt_extracts_latex.txt
-python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math keep --output output\kuiper_belt_extracts_keep.txt
+python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math remove --output output\kuiper_belt.txt
+python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math latex --output output\kuiper_belt.txt
+python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math keep --output output\kuiper_belt.txt
 ```
 
 Run both methods, save both outputs, compare mismatches, and save runtime:
 
 ```powershell
-python .\compare_extraction_methods.py --url "https://en.wikipedia.org/wiki/Saturn" --math remove --output output\saturn.txt
+python .\compare_extraction_methods.py --url "https://en.wikipedia.org/wiki/Saturn" --output output\saturn.txt
 ```
 
 This writes:
 
 ```text
-output\saturn_extracts.txt
-output\saturn_html.txt
-output\saturn_comparison.txt
-output\saturn_runtime.txt
+output\Saturn\English\saturn_extracts_remove.txt
+output\Saturn\English\saturn_html_remove.txt
+output\Saturn\English\saturn_extracts_latex.txt
+output\Saturn\English\saturn_html_latex.txt
+output\Saturn\English\saturn_extracts_keep.txt
+output\Saturn\English\saturn_html_keep.txt
+output\Saturn\English\saturn_comparison.txt
+output\Saturn\English\saturn_runtime.txt
 ```
+
+Outputs are grouped as `output\<Topic>\<Language>\...`, for example
+`output\Kuiper_belt\English\...`, `output\বাংলাদেশ\Bangla\...`, or
+`output\Kuiperin_vyöhyke\Suomi\...`.
 
 Write output to a file:
 

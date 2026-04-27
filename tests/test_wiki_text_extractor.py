@@ -5,8 +5,11 @@ from wiki_text_extractor import (
     clean_plain_text,
     clean_wikipedia_html,
     compare_texts,
+    comparison_output_path,
+    extraction_output_path,
     output_path_for_method,
     page_request_from_url,
+    runtime_output_path,
 )
 
 
@@ -56,6 +59,22 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         path = output_path_for_method("output/saturn.txt", "html", split_methods=True)
 
         self.assertEqual(path, Path("output/saturn_html.txt"))
+
+    def test_nested_output_paths_include_topic_and_language(self):
+        page = page_request_from_url("https://en.wikipedia.org/wiki/Kuiper_belt")
+
+        self.assertEqual(
+            extraction_output_path("output/kuiper_belt.txt", page, "extracts", "remove"),
+            Path("output/Kuiper_belt/English/kuiper_belt_extracts_remove.txt"),
+        )
+        self.assertEqual(
+            comparison_output_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/kuiper_belt_comparison.txt"),
+        )
+        self.assertEqual(
+            runtime_output_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/kuiper_belt_runtime.txt"),
+        )
 
     def test_compare_texts_reports_mismatch(self):
         report = compare_texts("Line one\nLine two", "Line one\nLine three")

@@ -199,7 +199,7 @@ class WikipediaTextParser(HTMLParser):
 
         if tag == "a" and "mw-file-description" in classes:
             file_title = attr_map.get("title", "").strip()
-            if file_title:
+            if is_non_word_glyph(file_title):
                 self._append_inline_text(file_title)
             self._skip_depth += 1
             return
@@ -338,6 +338,10 @@ class WikipediaTextParser(HTMLParser):
             self._math_depth -= 1
             return True
         return False
+
+
+def is_non_word_glyph(value: str) -> bool:
+    return bool(value.strip()) and not re.search(r"\w", value)
 
 
 def page_request_from_url(url: str) -> PageRequest:

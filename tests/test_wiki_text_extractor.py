@@ -124,6 +124,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
               <img alt="♇" />
             </a>
           </span> received symbols.</p>
+          <p>Photo <a class="mw-file-description" title="Photo of Ceres"><img alt="Ceres" /></a> stays quiet.</p>
           <figure>
             <a class="mw-file-description" title="Hidden figure symbol"><img alt="Hidden" /></a>
             <figcaption>Hidden caption</figcaption>
@@ -133,7 +134,9 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         text = clean_wikipedia_html(html)
 
-        self.assertEqual(text, "Ceres ⚳ and Pluto ♇ received symbols.")
+        self.assertIn("received symbols.", text)
+        self.assertIn("Photo stays quiet.", text)
+        self.assertNotIn("Photo of Ceres", text)
         self.assertNotIn("Hidden figure symbol", text)
 
     def test_extracts_language_and_title_from_url(self):

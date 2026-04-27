@@ -64,6 +64,41 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("-Line two", report)
         self.assertIn("+Line three", report)
 
+    def test_math_remove_drops_displaystyle_and_fragments(self):
+        text = """
+        The objects follow this relation:
+
+        d
+
+        D
+
+        ∝
+
+        {\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},}
+
+        Normal text remains.
+        """
+
+        cleaned = clean_plain_text(text, math_mode="remove")
+
+        self.assertEqual(cleaned, "The objects follow this relation:\n\nNormal text remains.")
+
+    def test_math_latex_keeps_clean_latex(self):
+        text = """
+        The objects follow this relation:
+
+        {\\displaystyle {\\frac {dN}{dD}}\\propto D^{-q},}
+        """
+
+        cleaned = clean_plain_text(text, math_mode="latex")
+
+        self.assertIn("${\\frac {dN}{dD}}\\propto D^{-q}$", cleaned)
+
+    def test_math_keep_preserves_raw_displaystyle(self):
+        text = "{\\displaystyle N\\propto D^{1-q}}"
+
+        self.assertIn("{\\displaystyle", clean_plain_text(text, math_mode="keep"))
+
 
 if __name__ == "__main__":
     unittest.main()

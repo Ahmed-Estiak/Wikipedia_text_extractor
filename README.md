@@ -36,10 +36,18 @@ Run the HTML parser method as its own Python file:
 python .\extract_with_html_parser.py --url "https://en.wikipedia.org/wiki/Saturn" --output output\saturn_html.txt
 ```
 
+Choose how math equations are handled:
+
+```powershell
+python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math remove --output output\kuiper_belt_extracts.txt
+python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math latex --output output\kuiper_belt_extracts_latex.txt
+python .\extract_with_extracts_api.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --math keep --output output\kuiper_belt_extracts_keep.txt
+```
+
 Run both methods, save both outputs, compare mismatches, and save runtime:
 
 ```powershell
-python .\compare_extraction_methods.py --url "https://en.wikipedia.org/wiki/Saturn" --output output\saturn.txt
+python .\compare_extraction_methods.py --url "https://en.wikipedia.org/wiki/Saturn" --math remove --output output\saturn.txt
 ```
 
 This writes:
@@ -63,6 +71,7 @@ python .\wiki_text_extractor.py --title "Bangladesh" --output bangladesh.txt
 - Reference markers and reference lists
 - Edit links and metadata blocks
 - References, external links, further reading, notes, and see also tail sections
+- Math equations can be removed, kept as LaTeX, or kept raw
 - Extra whitespace and noisy blank lines
 
 ## Scripts

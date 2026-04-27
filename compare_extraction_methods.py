@@ -38,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--title", help="Wikipedia page title")
     parser.add_argument("--lang", default="en", help="Wikipedia language code")
     parser.add_argument(
+        "--math",
+        choices=("remove", "latex", "keep"),
+        default="remove",
+        help="How math equations should be handled in both outputs",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         required=True,
@@ -51,8 +57,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
 
     try:
-        extracts_text, extracts_seconds = run_extraction(page, "extracts")
-        html_text, html_seconds = run_extraction(page, "html")
+        extracts_text, extracts_seconds = run_extraction(page, "extracts", args.math)
+        html_text, html_seconds = run_extraction(page, "html", args.math)
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -70,6 +76,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         [
             "Wikipedia Text Extraction Runtime",
             "",
+            f"Math mode: {args.math}",
             f"Extracts API runtime: {extracts_seconds:.3f} seconds",
             f"HTML parser runtime: {html_seconds:.3f} seconds",
             f"Runtime mismatch: {abs(extracts_seconds - html_seconds):.3f} seconds",

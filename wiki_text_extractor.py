@@ -24,6 +24,8 @@ TAIL_SECTION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
+MATH_FRAGMENT_PATTERN = re.compile(r"^[\sA-Za-z0-9+\-–−=∝×*/^().,{}\\]+$")
+MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
 
 
 @dataclass(frozen=True)
@@ -211,11 +213,85 @@ def fetch_page_extract(page: PageRequest) -> str:
     return pages[0].get("extract", "")
 
 
-def clean_plain_text(text: str) -> str:
+def normalize_latex(latex: str) -> str:
+    latex = re.sub(r"\s+", " ", latex)
+    latex = latex.replace(r"\text{", r"\mathrm{")
+    return latex.strip().rstrip(",.;:")
+
+
+def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
+    stripped = paragraph.strip()
+    if not stripped:
+        return False
+    if len(stripped) <= 2 and re.match(r"^[A-Za-z0-9]+$", stripped):
+        return True
+    if len(stripped) > 120:
+        return False
+    if not MATH_FRAGMENT_PATTERN.match(stripped):
+        return False
+    return bool(MATH_SYMBOL_PATTERN.search(stripped))
+
+
+def find_displaystyle_latex(paragraph: str) -> list[str]:
+    expressions: list[str] = []
+    marker = r"{\displaystyle"
+    start = 0
+    while True:
+        marker_index = paragraph.find(marker, start)
+        if marker_index == -1:
+            return expressions
+
+        depth = 0
+        end_index = None
+        for index in range(marker_index, len(paragraph)):
+            char = paragraph[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end_index = index
+                    break
+
+        if end_index is None:
+            return expressions
+
+        latex = paragraph[marker_index + len(marker) : end_index]
+        expressions.append(latex.strip())
+        start = end_index + 1
+
+
+def clean_math(text: str, math_mode: str) -> str:
+    if math_mode not in {"remove", "latex", "keep"}:
+        raise ValueError(f"Unsupported math mode: {math_mode}")
+    if math_mode == "keep":
+        return text
+
+    paragraphs = re.split(r"\n{2,}", text)
+    cleaned: list[str] = []
+    for paragraph in paragraphs:
+        latex_expressions = find_displaystyle_latex(paragraph)
+        if latex_expressions:
+            if math_mode == "latex":
+                latex_parts = [
+                    f"${normalize_latex(expression)}$"
+                    for expression in latex_expressions
+                ]
+                if latex_parts:
+                    cleaned.append(" ".join(latex_parts))
+            continue
+        if paragraph_looks_like_math_fragment(paragraph):
+            continue
+        cleaned.append(paragraph)
+    return "\n\n".join(cleaned)
+
+
+def clean_plain_text(text: str, math_mode: str = "remove") -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = TAIL_SECTION_PATTERN.sub("", text)
     text = INLINE_REFERENCE_PATTERN.sub("", text)
     text = re.sub(r"^\s*=+\s*(.*?)\s*=+\s*$", r"\1", text, flags=re.MULTILINE)
+    text = clean_math(text, math_mode)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n[ \t]+", "\n", text)
@@ -224,26 +300,26 @@ def clean_plain_text(text: str) -> str:
     return text.strip()
 
 
-def clean_wikipedia_html(html: str) -> str:
+def clean_wikipedia_html(html: str, math_mode: str = "remove") -> str:
     parser = WikipediaTextParser()
     parser.feed(html)
     parser.close()
-    return clean_plain_text(parser.get_text())
+    return clean_plain_text(parser.get_text(), math_mode)
 
 
-def extract_text_from_extracts_api(page: PageRequest) -> str:
-    return clean_plain_text(fetch_page_extract(page))
+def extract_text_from_extracts_api(page: PageRequest, math_mode: str = "remove") -> str:
+    return clean_plain_text(fetch_page_extract(page), math_mode)
 
 
-def extract_text_from_html(page: PageRequest) -> str:
-    return clean_wikipedia_html(fetch_page_html(page))
+def extract_text_from_html(page: PageRequest, math_mode: str = "remove") -> str:
+    return clean_wikipedia_html(fetch_page_html(page), math_mode)
 
 
-def extract_text(page: PageRequest, method: str = "extracts") -> str:
+def extract_text(page: PageRequest, method: str = "extracts", math_mode: str = "remove") -> str:
     if method == "extracts":
-        return extract_text_from_extracts_api(page)
+        return extract_text_from_extracts_api(page, math_mode)
     if method == "html":
-        return extract_text_from_html(page)
+        return extract_text_from_html(page, math_mode)
     raise ValueError(f"Unsupported extraction method: {method}")
 
 
@@ -260,9 +336,11 @@ def write_text_file(path: Path, text: str) -> None:
     path.write_text(text + "\n", encoding="utf-8")
 
 
-def run_extraction(page: PageRequest, method: str) -> tuple[str, float]:
+def run_extraction(
+    page: PageRequest, method: str, math_mode: str = "remove"
+) -> tuple[str, float]:
     started_at = time.perf_counter()
-    text = extract_text(page, method)
+    text = extract_text(page, method, math_mode)
     return text, time.perf_counter() - started_at
 
 
@@ -310,6 +388,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="extracts",
         help="Extraction method to use",
     )
+    parser.add_argument(
+        "--math",
+        choices=("remove", "latex", "keep"),
+        default="remove",
+        help="How math equations should be handled",
+    )
     parser.add_argument("-o", "--output", help="Write extracted text to this file")
     return parser
 
@@ -324,7 +408,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     methods = ("extracts", "html") if args.method == "both" else (args.method,)
 
     try:
-        results = {method: extract_text(page, method) for method in methods}
+        results = {method: extract_text(page, method, args.math) for method in methods}
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

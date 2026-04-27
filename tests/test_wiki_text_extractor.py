@@ -1,6 +1,12 @@
+from pathlib import Path
 import unittest
 
-from wiki_text_extractor import clean_wikipedia_html, page_request_from_url
+from wiki_text_extractor import (
+    clean_plain_text,
+    clean_wikipedia_html,
+    output_path_for_method,
+    page_request_from_url,
+)
 
 
 class CleanWikipediaHtmlTests(unittest.TestCase):
@@ -26,6 +32,29 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(page.lang, "en")
         self.assertEqual(page.title, "Albert Einstein")
+
+    def test_cleans_extracts_api_plain_text_noise(self):
+        text = """
+        Saturn is a planet.[1]
+
+        == History ==
+
+        It has rings.[2, 3]
+
+        == References ==
+
+        Reference text that should not be included.
+        """
+
+        self.assertEqual(
+            clean_plain_text(text),
+            "Saturn is a planet.\nHistory\nIt has rings.",
+        )
+
+    def test_output_path_for_both_methods_adds_method_suffix(self):
+        path = output_path_for_method("output/saturn.txt", "html", split_methods=True)
+
+        self.assertEqual(path, Path("output/saturn_html.txt"))
 
 
 if __name__ == "__main__":

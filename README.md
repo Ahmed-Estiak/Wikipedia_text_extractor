@@ -24,6 +24,26 @@ Extract by URL:
 python .\wiki_text_extractor.py --url "https://en.wikipedia.org/wiki/Bangladesh" --output output\bangladesh.txt
 ```
 
+Choose an extraction method:
+
+```powershell
+python .\wiki_text_extractor.py --url "https://en.wikipedia.org/wiki/Saturn" --method extracts --output output\saturn.txt
+python .\wiki_text_extractor.py --url "https://en.wikipedia.org/wiki/Saturn" --method html --output output\saturn.txt
+```
+
+Save both extraction methods for comparison:
+
+```powershell
+python .\wiki_text_extractor.py --url "https://en.wikipedia.org/wiki/Saturn" --method both --output output\saturn.txt
+```
+
+This writes:
+
+```text
+output\saturn_extracts.txt
+output\saturn_html.txt
+```
+
 Write output to a file:
 
 ```powershell
@@ -35,6 +55,7 @@ python .\wiki_text_extractor.py --title "Bangladesh" --output bangladesh.txt
 - Infoboxes, tables, navigation boxes, sidebars, and table of contents
 - Reference markers and reference lists
 - Edit links and metadata blocks
+- References, external links, further reading, notes, and see also tail sections
 - Extra whitespace and noisy blank lines
 
 ## Tests

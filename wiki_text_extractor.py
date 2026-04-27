@@ -17,6 +17,11 @@ from urllib.request import Request, urlopen
 
 API_TEMPLATE = "https://{lang}.wikipedia.org/w/api.php"
 USER_AGENT = "WikipediaTextExtractor/0.1"
+TAIL_SECTION_PATTERN = re.compile(
+    r"\n\s*==\s*(See also|References|External links|Further reading|Notes)\s*==[\s\S]*$",
+    re.IGNORECASE,
+)
+INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,–-]\s*\d+)*\]")
 
 
 @dataclass(frozen=True)
@@ -178,15 +183,79 @@ def fetch_page_html(page: PageRequest) -> str:
     return payload["parse"]["text"]
 
 
+def fetch_page_extract(page: PageRequest) -> str:
+    query = (
+        f"?action=query&prop=extracts&explaintext=1&titles={quote(page.title)}"
+        "&format=json&formatversion=2&redirects=1"
+    )
+    request = Request(API_TEMPLATE.format(lang=page.lang) + query)
+    request.add_header("User-Agent", USER_AGENT)
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise RuntimeError(f"Wikipedia API returned HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Could not reach Wikipedia API: {exc.reason}") from exc
+
+    if "error" in payload:
+        message = payload["error"].get("info", "Unknown Wikipedia API error")
+        raise RuntimeError(message)
+
+    pages = payload.get("query", {}).get("pages", [])
+    if not pages or pages[0].get("missing"):
+        raise RuntimeError(f"Wikipedia page not found: {page.title}")
+    return pages[0].get("extract", "")
+
+
+def clean_plain_text(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = TAIL_SECTION_PATTERN.sub("", text)
+    text = INLINE_REFERENCE_PATTERN.sub("", text)
+    text = re.sub(r"^\s*=+\s*(.*?)\s*=+\s*$", r"\1", text, flags=re.MULTILINE)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    return text.strip()
+
+
 def clean_wikipedia_html(html: str) -> str:
     parser = WikipediaTextParser()
     parser.feed(html)
     parser.close()
-    return parser.get_text()
+    return clean_plain_text(parser.get_text())
 
 
-def extract_text(page: PageRequest) -> str:
+def extract_text_from_extracts_api(page: PageRequest) -> str:
+    return clean_plain_text(fetch_page_extract(page))
+
+
+def extract_text_from_html(page: PageRequest) -> str:
     return clean_wikipedia_html(fetch_page_html(page))
+
+
+def extract_text(page: PageRequest, method: str = "extracts") -> str:
+    if method == "extracts":
+        return extract_text_from_extracts_api(page)
+    if method == "html":
+        return extract_text_from_html(page)
+    raise ValueError(f"Unsupported extraction method: {method}")
+
+
+def output_path_for_method(output: str, method: str, split_methods: bool) -> Path:
+    path = Path(output)
+    if not split_methods:
+        return path
+    suffix = path.suffix or ".txt"
+    return path.with_name(f"{path.stem}_{method}{suffix}")
+
+
+def write_text_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text + "\n", encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -197,6 +266,12 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--url", help="Wikipedia page URL")
     source.add_argument("--title", help="Wikipedia page title")
     parser.add_argument("--lang", default="en", help="Wikipedia language code")
+    parser.add_argument(
+        "--method",
+        choices=("extracts", "html", "both"),
+        default="extracts",
+        help="Extraction method to use",
+    )
     parser.add_argument("-o", "--output", help="Write extracted text to this file")
     return parser
 
@@ -208,17 +283,25 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
+    methods = ("extracts", "html") if args.method == "both" else (args.method,)
 
     try:
-        text = extract_text(page)
+        results = {method: extract_text(page, method) for method in methods}
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     if args.output:
-        Path(args.output).write_text(text + "\n", encoding="utf-8")
+        split_methods = len(results) > 1
+        for method, text in results.items():
+            path = output_path_for_method(args.output, method, split_methods)
+            write_text_file(path, text)
+            print(f"Saved {method} text: {path}")
     else:
-        print(text)
+        for method, text in results.items():
+            if len(results) > 1:
+                print(f"===== {method} =====")
+            print(text)
     return 0
 
 

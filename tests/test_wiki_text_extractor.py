@@ -112,6 +112,30 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "The Kuiper belt is in the outer Solar System.",
         )
 
+    def test_preserves_inline_file_symbols_from_titles(self):
+        html = """
+        <div class="mw-parser-output">
+          <p>Ceres <span class="skin-invert" typeof="mw:File">
+            <a href="/wiki/File:Ceres_symbol.svg" class="mw-file-description" title="⚳">
+              <img alt="⚳" />
+            </a>
+          </span> and Pluto <span class="skin-invert" typeof="mw:File">
+            <a href="/wiki/File:Pluto_symbol.svg" class="mw-file-description" title="♇">
+              <img alt="♇" />
+            </a>
+          </span> received symbols.</p>
+          <figure>
+            <a class="mw-file-description" title="Hidden figure symbol"><img alt="Hidden" /></a>
+            <figcaption>Hidden caption</figcaption>
+          </figure>
+        </div>
+        """
+
+        text = clean_wikipedia_html(html)
+
+        self.assertEqual(text, "Ceres ⚳ and Pluto ♇ received symbols.")
+        self.assertNotIn("Hidden figure symbol", text)
+
     def test_extracts_language_and_title_from_url(self):
         page = page_request_from_url("https://en.wikipedia.org/wiki/Albert_Einstein")
 

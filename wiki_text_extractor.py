@@ -197,6 +197,13 @@ class WikipediaTextParser(HTMLParser):
                 self._append_inline_marker("_")
             return
 
+        if tag == "a" and "mw-file-description" in classes:
+            file_title = attr_map.get("title", "").strip()
+            if file_title:
+                self._append_inline_text(file_title)
+            self._skip_depth += 1
+            return
+
         if (
             self._skip_depth
             or tag in self.SKIP_TAGS
@@ -270,7 +277,7 @@ class WikipediaTextParser(HTMLParser):
         if self._pending_prefix:
             text = self._pending_prefix + text.lstrip()
             self._pending_prefix = ""
-        self._parts.append(text)
+        self._append_inline_text(text)
 
     def get_text(self) -> str:
         text = "".join(self._parts)
@@ -309,6 +316,12 @@ class WikipediaTextParser(HTMLParser):
             self._heading_buffer.append(marker)
             return
         self._parts.append(marker)
+
+    def _append_inline_text(self, text: str) -> None:
+        if self._heading_buffer is not None:
+            self._heading_buffer.append(text)
+            return
+        self._parts.append(text)
 
     def _append_pending_space(self) -> None:
         target = self._heading_buffer if self._heading_buffer is not None else self._parts

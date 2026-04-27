@@ -13,6 +13,7 @@ from wiki_text_extractor import (
     extract_note_section,
     note_section_has_body,
     remove_empty_note_section,
+    raw_output_path,
 )
 
 
@@ -116,9 +117,9 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertIn("Article body.", cleaned)
         self.assertIn("Notes", cleaned)
-        self.assertIn("a. b. This note should remain.", cleaned)
-        self.assertIn("c. Another note should remain.", cleaned)
-        self.assertIn("a. b. No-space note should remain.", cleaned)
+        self.assertIn("This note should remain.", cleaned)
+        self.assertIn("Another note should remain.", cleaned)
+        self.assertIn("No-space note should remain.", cleaned)
         self.assertNotIn("^ a b", cleaned)
         self.assertNotIn("^c", cleaned)
         self.assertNotIn("^a^b", cleaned)
@@ -147,7 +148,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertIn("Article body.", cleaned)
         self.assertIn("Notes", cleaned)
-        self.assertIn("a. b. Visible note.", cleaned)
+        self.assertIn("Visible note.", cleaned)
         self.assertNotIn("Hidden related page.", cleaned)
         self.assertNotIn("Hidden reference.", cleaned)
 
@@ -200,6 +201,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(
             runtime_output_path("output/kuiper_belt.txt", page),
             Path("output/Kuiper_belt/English/kuiper_belt_runtime.txt"),
+        )
+        self.assertEqual(
+            raw_output_path("output/kuiper_belt.txt", page, "extracts"),
+            Path("output/Kuiper_belt/English/kuiper_belt_raw_extracts.txt"),
         )
 
     def test_compare_texts_reports_mismatch(self):

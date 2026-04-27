@@ -13,7 +13,10 @@ from wiki_text_extractor import (
     compare_texts,
     comparison_output_path,
     extraction_output_path,
+    fetch_page_extract,
+    fetch_page_html,
     page_request_from_url,
+    raw_output_path,
     run_extraction,
     runtime_output_path,
     write_text_file,
@@ -40,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Base text path, e.g. output/saturn.txt",
     )
+    parser.add_argument(
+        "--save-raw",
+        action="store_true",
+        help="Save raw Wikipedia API responses for debugging",
+    )
     return parser
 
 
@@ -62,6 +70,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         path = extraction_output_path(args.output, page, method, math_mode)
         write_text_file(path, text)
         print(f"Saved {method} text ({math_mode}): {path}")
+
+    if args.save_raw:
+        try:
+            raw_extracts_path = raw_output_path(args.output, page, "extracts")
+            raw_html_path = raw_output_path(args.output, page, "html")
+            write_text_file(raw_extracts_path, fetch_page_extract(page))
+            write_text_file(raw_html_path, fetch_page_html(page))
+            print(f"Saved raw extracts API text: {raw_extracts_path}")
+            print(f"Saved raw parse HTML text: {raw_html_path}")
+        except RuntimeError as exc:
+            print(f"Error saving raw API responses: {exc}", file=sys.stderr)
+            return 1
 
     comparison_path = comparison_output_path(args.output, page)
     if "remove" in math_modes:

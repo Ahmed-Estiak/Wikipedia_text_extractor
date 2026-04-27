@@ -50,6 +50,12 @@ Run both methods, save both outputs, compare mismatches, and save runtime:
 python .\compare_extraction_methods.py --url "https://en.wikipedia.org/wiki/Saturn" --output output\saturn.txt
 ```
 
+Save raw Wikipedia API responses for debugging:
+
+```powershell
+python .\compare_extraction_methods.py --url "https://en.wikipedia.org/wiki/Kuiper_belt" --output output\kuiper_belt.txt --save-raw
+```
+
 This writes:
 
 ```text
@@ -61,6 +67,13 @@ output\Saturn\English\saturn_extracts_keep.txt
 output\Saturn\English\saturn_html_keep.txt
 output\Saturn\English\saturn_comparison.txt
 output\Saturn\English\saturn_runtime.txt
+```
+
+With `--save-raw`, this also writes:
+
+```text
+output\Saturn\English\saturn_raw_extracts.txt
+output\Saturn\English\saturn_raw_html.txt
 ```
 
 Outputs are grouped as `output\<Topic>\<Language>\...`, for example

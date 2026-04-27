@@ -318,7 +318,6 @@ def clean_leading_caret_markers(text: str) -> str:
             continue
 
         index = 1
-        labels: list[str] = []
         while index < len(stripped):
             while index < len(stripped) and stripped[index].isspace():
                 index += 1
@@ -328,18 +327,10 @@ def clean_leading_caret_markers(text: str) -> str:
             if index < len(stripped) and stripped[index].isalnum():
                 next_char = stripped[index + 1] if index + 1 < len(stripped) else ""
                 if not next_char or next_char.isspace() or next_char == "^" or next_char.isupper():
-                    labels.append(stripped[index])
                     index += 1
                     continue
             break
-        rest = stripped[index:].lstrip()
-        label_prefix = " ".join(f"{label}." for label in labels)
-        if label_prefix and rest:
-            cleaned_lines.append(f"{label_prefix} {rest}")
-        elif label_prefix:
-            cleaned_lines.append(label_prefix)
-        else:
-            cleaned_lines.append(rest)
+        cleaned_lines.append(stripped[index:].lstrip())
     return "\n".join(cleaned_lines)
 
 
@@ -567,6 +558,11 @@ def comparison_output_path(output: str, page: PageRequest) -> Path:
 def runtime_output_path(output: str, page: PageRequest) -> Path:
     suffix = Path(output).suffix or ".txt"
     return output_directory(output, page) / f"{topic_file_stem(page)}_runtime{suffix}"
+
+
+def raw_output_path(output: str, page: PageRequest, source: str) -> Path:
+    suffix = Path(output).suffix or ".txt"
+    return output_directory(output, page) / f"{topic_file_stem(page)}_raw_{source}{suffix}"
 
 
 def write_text_file(path: Path, text: str) -> None:

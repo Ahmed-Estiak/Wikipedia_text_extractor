@@ -86,6 +86,68 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "Saturn is a planet.\nHistory\nIt has 8 (=2^3) rings.",
         )
 
+    def test_removes_selected_sections_but_keeps_notes(self):
+        text = """
+        Article body.
+
+        == See also ==
+
+        Hidden related page.
+
+        == Notes ==
+
+        ^ a b This note should remain.
+        ^c Another note should remain.
+        ^a^bNo-space note should remain.
+
+        == References ==
+
+        Hidden reference.
+
+        == External links ==
+
+        Hidden link.
+        """
+
+        cleaned = clean_plain_text(text)
+
+        self.assertIn("Article body.", cleaned)
+        self.assertIn("Notes", cleaned)
+        self.assertIn("This note should remain.", cleaned)
+        self.assertIn("Another note should remain.", cleaned)
+        self.assertIn("No-space note should remain.", cleaned)
+        self.assertNotIn("^ a b", cleaned)
+        self.assertNotIn("^c", cleaned)
+        self.assertNotIn("^a^b", cleaned)
+        self.assertNotIn("Hidden related page.", cleaned)
+        self.assertNotIn("Hidden reference.", cleaned)
+        self.assertNotIn("Hidden link.", cleaned)
+
+    def test_removes_plain_html_sections_but_keeps_plain_notes(self):
+        text = """
+        Article body.
+
+        See also
+
+        Hidden related page.
+
+        Notes
+
+        ^a^bVisible note.
+
+        References
+
+        Hidden reference.
+        """
+
+        cleaned = clean_plain_text(text)
+
+        self.assertIn("Article body.", cleaned)
+        self.assertIn("Notes", cleaned)
+        self.assertIn("Visible note.", cleaned)
+        self.assertNotIn("Hidden related page.", cleaned)
+        self.assertNotIn("Hidden reference.", cleaned)
+
     def test_output_path_for_both_methods_adds_method_suffix(self):
         path = output_path_for_method("output/saturn.txt", "html", split_methods=True)
 

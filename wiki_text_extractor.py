@@ -21,11 +21,11 @@ API_TEMPLATE = "https://{lang}.wikipedia.org/w/api.php"
 USER_AGENT = "WikipediaTextExtractor/0.1"
 EXTRACTION_METHODS = ("extracts", "html")
 MATH_MODES = ("remove", "latex", "keep")
-TAIL_SECTION_PATTERN = re.compile(
-    r"\n[ \t]*==[ \t]*(See also|References|External links|Further reading|Notes)[ \t]*==[\s\S]*$",
-    re.IGNORECASE,
-)
+REMOVED_SECTION_TITLES = {"see also", "references", "external links"}
+PLAIN_SECTION_TITLES = REMOVED_SECTION_TITLES | {"note", "notes"}
+SECTION_HEADING_PATTERN = re.compile(r"^\s*(=+)\s*(.*?)\s*\1\s*$")
 INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
+LEADING_CARET_MARKER_PATTERN = re.compile(r"^[ \t]*(?:\^(?:[ \t]*[a-zA-Z0-9]+)?[ \t]*)+")
 MATH_FRAGMENT_PATTERN = re.compile(r"^[\sA-Za-z0-9+\-–−=∝×*/^().,{}\\]+$")
 MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
 EMPTY_PARENTHESES_PATTERN = re.compile(r"\s*\(\s*\)")
@@ -265,6 +265,62 @@ def repair_compact_power_notation(text: str) -> str:
     return POWER_HINT_PATTERN.sub(replace, text)
 
 
+def remove_unwanted_sections(text: str) -> str:
+    lines = text.splitlines()
+    kept: list[str] = []
+    skip_level: int | None = None
+    skip_plain_section = False
+
+    for line in lines:
+        heading = SECTION_HEADING_PATTERN.match(line)
+        if heading:
+            level = len(heading.group(1))
+            title = heading.group(2).strip().casefold()
+            if skip_level is not None and level <= skip_level:
+                skip_level = None
+            skip_plain_section = False
+            if title in REMOVED_SECTION_TITLES:
+                skip_level = level
+                continue
+
+        plain_title = line.strip().casefold()
+        if plain_title in PLAIN_SECTION_TITLES:
+            skip_plain_section = plain_title in REMOVED_SECTION_TITLES
+            if not skip_plain_section:
+                kept.append(line)
+            continue
+
+        if skip_level is None and not skip_plain_section:
+            kept.append(line)
+
+    return "\n".join(kept)
+
+
+def clean_leading_caret_markers(text: str) -> str:
+    cleaned_lines = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("^"):
+            cleaned_lines.append(line)
+            continue
+
+        index = 1
+        while index < len(stripped):
+            while index < len(stripped) and stripped[index].isspace():
+                index += 1
+            if index < len(stripped) and stripped[index] == "^":
+                index += 1
+                continue
+            if index < len(stripped) and stripped[index].isalnum():
+                next_char = stripped[index + 1] if index + 1 < len(stripped) else ""
+                if not next_char or next_char.isspace() or next_char == "^" or next_char.isupper():
+                    index += 1
+                    continue
+            break
+        cleaned_lines.append(stripped[index:].lstrip())
+    return "\n".join(cleaned_lines)
+
+
 def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
     stripped = paragraph.strip()
     if not stripped:
@@ -381,7 +437,8 @@ def clean_math(text: str, math_mode: str) -> str:
 
 def clean_plain_text(text: str, math_mode: str = "remove") -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = TAIL_SECTION_PATTERN.sub("", text)
+    text = remove_unwanted_sections(text)
+    text = clean_leading_caret_markers(text)
     text = INLINE_REFERENCE_PATTERN.sub("", text)
     text = re.sub(r"^\s*=+\s*(.*?)\s*=+\s*$", r"\1", text, flags=re.MULTILINE)
     text = clean_math(text, math_mode)

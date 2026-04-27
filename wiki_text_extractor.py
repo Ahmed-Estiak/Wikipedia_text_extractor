@@ -22,6 +22,7 @@ USER_AGENT = "WikipediaTextExtractor/0.1"
 EXTRACTION_METHODS = ("extracts", "html")
 MATH_MODES = ("remove", "latex", "keep")
 REMOVED_SECTION_TITLES = {"see also", "references", "external links"}
+REMOVED_SECTION_IDS = {"See_also", "References", "External_links"}
 PLAIN_SECTION_TITLES = REMOVED_SECTION_TITLES | {"note", "notes"}
 SECTION_HEADING_PATTERN = re.compile(r"^\s*(=+)\s*(.*?)\s*\1\s*$")
 INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
@@ -107,11 +108,7 @@ class WikipediaTextParser(HTMLParser):
         "vertical-navbox",
     }
     SKIP_IDS = {
-        "References",
-        "External_links",
         "Further_reading",
-        "See_also",
-        "Notes",
     }
 
     def __init__(self) -> None:
@@ -119,11 +116,24 @@ class WikipediaTextParser(HTMLParser):
         self._parts: list[str] = []
         self._skip_depth = 0
         self._sup_depth = 0
+        self._heading_level: int | None = None
+        self._skip_section_level: int | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {name: value or "" for name, value in attrs}
         classes = set(attr_map.get("class", "").split())
         element_id = attr_map.get("id", "")
+        heading_level = int(tag[1]) if re.fullmatch(r"h[1-6]", tag) else None
+
+        if heading_level is not None:
+            if self._skip_section_level is not None and heading_level <= self._skip_section_level:
+                self._skip_section_level = None
+            self._heading_level = heading_level
+
+        if self._heading_level is not None and element_id in REMOVED_SECTION_IDS:
+            self._skip_section_level = self._heading_level
+            self._skip_depth += 1
+            return
 
         if tag == "sup":
             if classes.intersection(self.SKIP_CLASSES) or "reference" in classes:
@@ -150,6 +160,9 @@ class WikipediaTextParser(HTMLParser):
             self._skip_depth -= 1
             return
 
+        if re.fullmatch(r"h[1-6]", tag):
+            self._heading_level = None
+
         if tag == "sup" and self._sup_depth:
             self._sup_depth -= 1
             return
@@ -158,7 +171,7 @@ class WikipediaTextParser(HTMLParser):
             self._add_break()
 
     def handle_data(self, data: str) -> None:
-        if self._skip_depth:
+        if self._skip_depth or self._skip_section_level is not None:
             return
         text = re.sub(r"\s+", " ", data)
         if text.strip():
@@ -459,8 +472,38 @@ def clean_wikipedia_html(html: str, math_mode: str = "remove") -> str:
     return clean_plain_text(parser.get_text(), math_mode)
 
 
+def extract_note_section(text: str) -> str:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().casefold() in {"note", "notes"}:
+            return "\n".join(lines[index:]).strip()
+    return ""
+
+
+def note_section_has_body(text: str) -> bool:
+    note_section = extract_note_section(text)
+    if not note_section:
+        return False
+    lines = [line.strip() for line in note_section.splitlines() if line.strip()]
+    return len(lines) > 1
+
+
 def extract_text_from_extracts_api(page: PageRequest, math_mode: str = "remove") -> str:
-    return clean_plain_text(fetch_page_extract(page), math_mode)
+    text = clean_plain_text(fetch_page_extract(page), math_mode)
+    if note_section_has_body(text):
+        return text
+
+    html_note_section = extract_note_section(
+        clean_wikipedia_html(fetch_page_html(page), math_mode)
+    )
+    if not html_note_section:
+        return text
+
+    without_empty_note = re.sub(
+        r"\n{0,2}(Note|Notes)\s*$", "", text, flags=re.IGNORECASE
+    ).strip()
+    return f"{without_empty_note}\n\n{html_note_section}".strip()
+
 
 
 def extract_text_from_html(page: PageRequest, math_mode: str = "remove") -> str:

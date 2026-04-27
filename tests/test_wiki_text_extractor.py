@@ -10,6 +10,8 @@ from wiki_text_extractor import (
     output_path_for_method,
     page_request_from_url,
     runtime_output_path,
+    extract_note_section,
+    note_section_has_body,
 )
 
 
@@ -146,6 +148,35 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Notes", cleaned)
         self.assertIn("Visible note.", cleaned)
         self.assertNotIn("Hidden related page.", cleaned)
+        self.assertNotIn("Hidden reference.", cleaned)
+
+    def test_note_section_helpers_detect_missing_body_and_keep_list_labels(self):
+        self.assertFalse(note_section_has_body("Article body.\n\nNote"))
+        self.assertTrue(note_section_has_body("Article body.\n\nNote\n\na. Visible note."))
+        self.assertEqual(
+            extract_note_section("Article body.\n\nNote\n\na. Visible note.\n\nb. Other note."),
+            "Note\n\na. Visible note.\n\nb. Other note.",
+        )
+
+    def test_html_parser_removes_section_content_by_heading_id(self):
+        html = """
+        <div class="mw-parser-output">
+          <p>Article body.</p>
+          <div class="mw-heading mw-heading2"><h2 id="See_also">See also</h2></div>
+          <ul><li>Hidden related page</li></ul>
+          <div class="mw-heading mw-heading2"><h2 id="Note">Note</h2></div>
+          <p>a. Visible note stays.</p>
+          <h2><span id="References">References</span></h2>
+          <p>Hidden reference.</p>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html)
+
+        self.assertIn("Article body.", cleaned)
+        self.assertIn("Note", cleaned)
+        self.assertIn("a. Visible note stays.", cleaned)
+        self.assertNotIn("Hidden related page", cleaned)
         self.assertNotIn("Hidden reference.", cleaned)
 
     def test_output_path_for_both_methods_adds_method_suffix(self):

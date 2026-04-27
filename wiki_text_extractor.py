@@ -78,7 +78,7 @@ class WikipediaTextParser(HTMLParser):
         "tr",
         "ul",
     }
-    SKIP_TAGS = {"script", "style", "table"}
+    SKIP_TAGS = {"figcaption", "figure", "map", "script", "style", "table"}
     SKIP_CLASSES = {
         "ambox",
         "asbox",
@@ -86,13 +86,23 @@ class WikipediaTextParser(HTMLParser):
         "citation",
         "hatnote",
         "infobox",
+        "image",
+        "imagemap",
+        "locmap",
         "metadata",
+        "mw-file-description",
+        "mw-kartographer-map",
         "mw-editsection",
         "navbox",
+        "noexcerpt",
         "noprint",
+        "noviewer",
         "reference",
         "reflist",
         "sidebar",
+        "thumb",
+        "thumbcaption",
+        "thumbinner",
         "toc",
         "vertical-navbox",
     }

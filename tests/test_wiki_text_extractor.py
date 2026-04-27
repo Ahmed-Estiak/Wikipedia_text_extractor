@@ -43,6 +43,25 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "There are 8 (=2^3) examples at 90°.",
         )
 
+    def test_removes_image_captions_and_map_labels(self):
+        html = """
+        <div class="mw-parser-output">
+          <figure>
+            <figcaption>Hidden figure caption</figcaption>
+          </figure>
+          <div class="thumb">
+            <div class="thumbcaption">Hidden thumb caption</div>
+          </div>
+          <div class="noexcerpt">Sun Jupiter trojans Giant planets</div>
+          <p>The Kuiper belt is in the outer Solar System.</p>
+        </div>
+        """
+
+        self.assertEqual(
+            clean_wikipedia_html(html),
+            "The Kuiper belt is in the outer Solar System.",
+        )
+
     def test_extracts_language_and_title_from_url(self):
         page = page_request_from_url("https://en.wikipedia.org/wiki/Albert_Einstein")
 

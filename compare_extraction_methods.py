@@ -10,6 +10,7 @@ from wiki_text_extractor import (
     EXTRACTION_METHODS,
     MATH_MODES,
     PageRequest,
+    clean_wikipedia_html_with_references,
     compare_texts,
     comparison_output_path,
     extraction_output_path,
@@ -17,6 +18,7 @@ from wiki_text_extractor import (
     fetch_page_html,
     page_request_from_url,
     raw_output_path,
+    references_output_path,
     run_extraction,
     runtime_output_path,
     write_text_file,
@@ -47,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--save-raw",
         action="store_true",
         help="Save raw Wikipedia API responses for debugging",
+    )
+    parser.add_argument(
+        "--save-references",
+        action="store_true",
+        help="Save an HTML-only text file with citation numbers and References",
     )
     return parser
 
@@ -81,6 +88,18 @@ def main(argv: Iterable[str] | None = None) -> int:
             print(f"Saved raw parse HTML text: {raw_html_path}")
         except RuntimeError as exc:
             print(f"Error saving raw API responses: {exc}", file=sys.stderr)
+            return 1
+
+    if args.save_references:
+        try:
+            references_path = references_output_path(args.output, page)
+            write_text_file(
+                references_path,
+                clean_wikipedia_html_with_references(fetch_page_html(page), "remove"),
+            )
+            print(f"Saved HTML references text: {references_path}")
+        except RuntimeError as exc:
+            print(f"Error saving HTML references text: {exc}", file=sys.stderr)
             return 1
 
     comparison_path = comparison_output_path(args.output, page)

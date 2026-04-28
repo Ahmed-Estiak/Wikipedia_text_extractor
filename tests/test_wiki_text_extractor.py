@@ -3,6 +3,7 @@ import unittest
 
 from wiki_text_extractor import (
     clean_plain_text,
+    clean_wikipedia_html_with_references,
     clean_wikipedia_html,
     compare_texts,
     comparison_output_path,
@@ -10,6 +11,7 @@ from wiki_text_extractor import (
     output_path_for_method,
     page_request_from_url,
     runtime_output_path,
+    references_output_path,
     extract_note_section,
     note_section_has_body,
     remove_empty_note_section,
@@ -322,6 +324,31 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("b. Second note.", cleaned)
         self.assertNotIn("^", cleaned)
 
+    def test_html_references_export_keeps_markers_and_numeric_references(self):
+        html = """
+        <div class="mw-parser-output">
+          <p>Article text.<sup class="reference"><a><span>[</span>1<span>]</span></a></sup> More text.</p>
+          <div class="mw-heading mw-heading2"><h2 id="References">References</h2></div>
+          <ol class="references">
+            <li><span class="mw-cite-backlink">^</span>
+              <span class="reference-text">First source. Retrieved 2024.</span></li>
+            <li><span class="mw-cite-backlink">^</span>
+              <span class="reference-text">Second source.</span></li>
+          </ol>
+          <div class="mw-heading mw-heading2"><h2 id="Notes">Notes</h2></div>
+          <ol class="references" data-mw-group="lower-alpha">
+            <li><span class="reference-text">A note, not a numeric reference.</span></li>
+          </ol>
+        </div>
+        """
+
+        text = clean_wikipedia_html_with_references(html)
+
+        self.assertIn("Article text.[1] More text.", text)
+        self.assertIn("== References ==\n\n1. First source. Retrieved 2024.", text)
+        self.assertIn("2. Second source.", text)
+        self.assertNotIn("3. A note, not a numeric reference.", text)
+
     def test_lower_alpha_label_handles_multiple_letters(self):
         self.assertEqual(lower_alpha_label(1), "a")
         self.assertEqual(lower_alpha_label(26), "z")
@@ -350,6 +377,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(
             raw_output_path("output/kuiper_belt.txt", page, "extracts"),
             Path("output/Kuiper_belt/English/kuiper_belt_raw_extracts.txt"),
+        )
+        self.assertEqual(
+            references_output_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/kuiper_belt_html_references.txt"),
         )
 
     def test_compare_texts_reports_mismatch(self):

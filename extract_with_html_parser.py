@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from typing import Iterable
 
 from wiki_text_extractor import (
     PageRequest,
+    clean_wikipedia_html,
+    clean_wikipedia_html_with_references,
     extraction_output_path,
+    fetch_page_html,
     page_request_from_url,
+    references_output_path,
     run_extraction,
     runtime_output_path,
     write_text_file,
@@ -36,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Text file path where the cleaned output will be saved",
     )
+    parser.add_argument(
+        "--save-references",
+        action="store_true",
+        help="Also save an HTML-only text file with citation numbers and References",
+    )
     return parser
 
 
@@ -44,10 +54,22 @@ def main(argv: Iterable[str] | None = None) -> int:
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
 
     try:
-        text, seconds = run_extraction(page, "html", args.math)
+        references_path = None
+        if args.save_references:
+            started_at = time.perf_counter()
+            html = fetch_page_html(page)
+            text = clean_wikipedia_html(html, args.math)
+            references_text = clean_wikipedia_html_with_references(html, args.math)
+            seconds = time.perf_counter() - started_at
+        else:
+            text, seconds = run_extraction(page, "html", args.math)
+            references_text = ""
         output_path = extraction_output_path(args.output, page, "html", args.math)
         runtime_path = runtime_output_path(args.output, page)
         write_text_file(output_path, text)
+        if args.save_references:
+            references_path = references_output_path(args.output, page)
+            write_text_file(references_path, references_text)
         write_text_file(
             runtime_path,
             "\n".join(
@@ -64,6 +86,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 1
 
     print(f"Saved HTML parser text: {output_path}")
+    if references_path:
+        print(f"Saved HTML references text: {references_path}")
     print(f"Updated runtime report: {runtime_path}")
     return 0
 

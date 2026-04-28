@@ -119,11 +119,14 @@ class WikipediaTextParser(HTMLParser):
         "mwe-math-mathml-inline",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, include_reference_markers: bool = False) -> None:
         super().__init__(convert_charrefs=True)
+        self._include_reference_markers = include_reference_markers
         self._parts: list[str] = []
         self._skip_depth = 0
         self._sup_depth = 0
+        self._reference_marker_buffer: list[str] | None = None
+        self._reference_marker_depth = 0
         self._sub_depth = 0
         self._reference_skip_depth = 0
         self._pending_reference_separator = False
@@ -137,6 +140,10 @@ class WikipediaTextParser(HTMLParser):
         self._pending_prefix = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._reference_marker_buffer is not None:
+            self._reference_marker_depth += 1
+            return
+
         attr_map = {name: value or "" for name, value in attrs}
         classes = set(attr_map.get("class", "").split())
         element_id = attr_map.get("id", "")
@@ -183,9 +190,13 @@ class WikipediaTextParser(HTMLParser):
 
         if tag == "sup":
             if classes.intersection(self.SKIP_CLASSES) or "reference" in classes:
-                self._skip_depth += 1
-                if "reference" in classes:
-                    self._reference_skip_depth += 1
+                if self._include_reference_markers and "reference" in classes:
+                    self._reference_marker_buffer = []
+                    self._reference_marker_depth = 1
+                else:
+                    self._skip_depth += 1
+                    if "reference" in classes:
+                        self._reference_skip_depth += 1
             else:
                 self._sup_depth += 1
                 self._parts.append("^")
@@ -222,6 +233,12 @@ class WikipediaTextParser(HTMLParser):
             self._add_break()
 
     def handle_endtag(self, tag: str) -> None:
+        if self._reference_marker_buffer is not None:
+            self._reference_marker_depth -= 1
+            if self._reference_marker_depth <= 0:
+                self._flush_reference_marker()
+            return
+
         if self._skip_depth:
             self._skip_depth -= 1
             if tag == "sup" and self._reference_skip_depth:
@@ -257,6 +274,9 @@ class WikipediaTextParser(HTMLParser):
             self._add_break()
 
     def handle_data(self, data: str) -> None:
+        if self._reference_marker_buffer is not None:
+            self._reference_marker_buffer.append(data)
+            return
         if self._skip_depth or self._skip_section_level is not None:
             return
         text = re.sub(r"\s+", " ", data)
@@ -311,6 +331,19 @@ class WikipediaTextParser(HTMLParser):
         self._parts.append(f"== {heading} ==")
         self._add_break()
 
+    def _flush_reference_marker(self) -> None:
+        if self._reference_marker_buffer is None:
+            return
+        marker = re.sub(r"\s+", "", "".join(self._reference_marker_buffer))
+        self._reference_marker_buffer = None
+        self._reference_marker_depth = 0
+        if not marker:
+            return
+        if not marker.startswith("["):
+            marker = f"[{marker}]"
+        self._append_inline_text(marker)
+        self._pending_reference_separator = True
+
     def _append_inline_marker(self, marker: str) -> None:
         if self._heading_buffer is not None:
             self._heading_buffer.append(marker)
@@ -342,6 +375,97 @@ class WikipediaTextParser(HTMLParser):
 
 def is_non_word_glyph(value: str) -> bool:
     return bool(value.strip()) and not re.search(r"\w", value)
+
+
+class WikipediaReferencesParser(HTMLParser):
+    """Extract numbered citation text from Wikipedia reference lists."""
+
+    SKIP_CLASSES = {"mw-cite-backlink", "mw-editsection", "noprint"}
+    BLOCK_TAGS = {"br", "div", "li", "p"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.references: list[str] = []
+        self._in_reference_list = False
+        self._reference_list_depth = 0
+        self._li_depth = 0
+        self._skip_depth = 0
+        self._current_parts: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {name: value or "" for name, value in attrs}
+        classes = set(attr_map.get("class", "").split())
+
+        if self._skip_depth:
+            self._skip_depth += 1
+            return
+
+        if tag in {"script", "style"} or classes.intersection(self.SKIP_CLASSES):
+            self._skip_depth += 1
+            return
+
+        if tag == "ol" and "references" in classes:
+            group = attr_map.get("data-mw-group", "")
+            if group != "lower-alpha":
+                self._in_reference_list = True
+                self._reference_list_depth = 1
+                return
+
+        if self._in_reference_list and tag == "ol":
+            self._reference_list_depth += 1
+
+        if self._in_reference_list and tag == "li" and self._li_depth == 0:
+            self._li_depth = 1
+            self._current_parts = []
+            return
+
+        if self._li_depth:
+            if tag == "li":
+                self._li_depth += 1
+            if tag in self.BLOCK_TAGS:
+                self._append_reference_text(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._skip_depth:
+            self._skip_depth -= 1
+            return
+
+        if self._li_depth and tag == "li":
+            self._li_depth -= 1
+            if self._li_depth == 0:
+                self._flush_reference()
+            return
+
+        if self._in_reference_list and tag == "ol":
+            self._reference_list_depth -= 1
+            if self._reference_list_depth <= 0:
+                self._in_reference_list = False
+
+        if self._li_depth and tag in self.BLOCK_TAGS:
+            self._append_reference_text(" ")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth or not self._li_depth:
+            return
+        self._append_reference_text(data)
+
+    def _append_reference_text(self, text: str) -> None:
+        if self._current_parts is not None:
+            self._current_parts.append(text)
+
+    def _flush_reference(self) -> None:
+        if self._current_parts is None:
+            return
+        text = clean_reference_text("".join(self._current_parts))
+        self._current_parts = None
+        if text:
+            self.references.append(f"{len(self.references) + 1}. {text}")
+
+
+def clean_reference_text(text: str) -> str:
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    return text.strip()
 
 
 def page_request_from_url(url: str) -> PageRequest:
@@ -642,11 +766,14 @@ def clean_math(text: str, math_mode: str) -> str:
     return "\n\n".join(cleaned)
 
 
-def clean_plain_text(text: str, math_mode: str = "remove") -> str:
+def clean_plain_text(
+    text: str, math_mode: str = "remove", remove_inline_references: bool = True
+) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = remove_unwanted_sections(text)
     text = clean_leading_caret_markers(text)
-    text = INLINE_REFERENCE_PATTERN.sub("", text)
+    if remove_inline_references:
+        text = INLINE_REFERENCE_PATTERN.sub("", text)
     text = normalize_section_headings(text)
     text = clean_math(text, math_mode)
     text = repair_compact_power_notation(text)
@@ -665,6 +792,28 @@ def clean_wikipedia_html(html: str, math_mode: str = "remove") -> str:
     parser.feed(html)
     parser.close()
     return clean_plain_text(parser.get_text(), math_mode)
+
+
+def extract_references_from_html(html: str) -> str:
+    parser = WikipediaReferencesParser()
+    parser.feed(html)
+    parser.close()
+    if not parser.references:
+        return ""
+    return "== References ==\n\n" + "\n\n".join(parser.references)
+
+
+def clean_wikipedia_html_with_references(
+    html: str, math_mode: str = "remove"
+) -> str:
+    parser = WikipediaTextParser(include_reference_markers=True)
+    parser.feed(html)
+    parser.close()
+    body = clean_plain_text(
+        parser.get_text(), math_mode, remove_inline_references=False
+    )
+    references = extract_references_from_html(html)
+    return "\n\n".join(part for part in (body, references) if part).strip()
 
 
 def extract_note_section(text: str) -> str:
@@ -763,6 +912,11 @@ def runtime_output_path(output: str, page: PageRequest) -> Path:
 def raw_output_path(output: str, page: PageRequest, source: str) -> Path:
     suffix = Path(output).suffix or ".txt"
     return output_directory(output, page) / f"{topic_file_stem(page)}_raw_{source}{suffix}"
+
+
+def references_output_path(output: str, page: PageRequest) -> Path:
+    suffix = Path(output).suffix or ".txt"
+    return output_directory(output, page) / f"{topic_file_stem(page)}_html_references{suffix}"
 
 
 def write_text_file(path: Path, text: str) -> None:

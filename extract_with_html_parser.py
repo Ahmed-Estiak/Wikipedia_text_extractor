@@ -22,6 +22,7 @@ from wiki_text_extractor import (
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Defines the HTML-only CLI, including optional citation/reference export.
     parser = argparse.ArgumentParser(
         description="Extract clean Wikipedia text by parsing page HTML."
     )
@@ -50,26 +51,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    # Parses command arguments and resolves either a URL or title into a PageRequest.
     args = build_parser().parse_args(argv)
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
 
     try:
         references_path = None
         if args.save_references:
+            # Fetches HTML once so both normal clean text and references output use the same source.
             started_at = time.perf_counter()
             html = fetch_page_html(page)
             text = clean_wikipedia_html(html, args.math)
             references_text = clean_wikipedia_html_with_references(html, args.math)
             seconds = time.perf_counter() - started_at
         else:
+            # Runs the standard HTML extraction path when no references file is requested.
             text, seconds = run_extraction(page, "html", args.math)
             references_text = ""
+        # Uses the shared topic/language folder layout for the cleaned HTML output.
         output_path = extraction_output_path(args.output, page, "html", args.math)
         runtime_path = runtime_output_path(args.output, page)
         write_text_file(output_path, text)
         if args.save_references:
+            # Writes the citation-numbered article plus appended References as a separate file.
             references_path = references_output_path(args.output, page)
             write_text_file(references_path, references_text)
+        # Updates the shared runtime file with the latest HTML-only run.
         write_text_file(
             runtime_path,
             "\n".join(

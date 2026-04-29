@@ -40,6 +40,7 @@ LANGUAGE_FOLDER_NAMES = {
 
 @dataclass(frozen=True)
 class PageRequest:
+    # Carries the normalized Wikipedia page title and language code through the pipeline.
     title: str
     lang: str = "en"
 
@@ -120,6 +121,7 @@ class WikipediaTextParser(HTMLParser):
     }
 
     def __init__(self, include_reference_markers: bool = False) -> None:
+        # Initializes parser state for clean article text and optional inline citation markers.
         super().__init__(convert_charrefs=True)
         self._include_reference_markers = include_reference_markers
         self._parts: list[str] = []
@@ -140,6 +142,7 @@ class WikipediaTextParser(HTMLParser):
         self._pending_prefix = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # Handles HTML opening tags, skip rules, headings, lists, refs, and inline math markers.
         if self._reference_marker_buffer is not None:
             self._reference_marker_depth += 1
             return
@@ -233,6 +236,7 @@ class WikipediaTextParser(HTMLParser):
             self._add_break()
 
     def handle_endtag(self, tag: str) -> None:
+        # Closes parser state for skipped blocks, lists, headings, superscripts, and math spans.
         if self._reference_marker_buffer is not None:
             self._reference_marker_depth -= 1
             if self._reference_marker_depth <= 0:
@@ -274,6 +278,7 @@ class WikipediaTextParser(HTMLParser):
             self._add_break()
 
     def handle_data(self, data: str) -> None:
+        # Adds visible text nodes while preserving needed separators after refs/subscripts.
         if self._reference_marker_buffer is not None:
             self._reference_marker_buffer.append(data)
             return
@@ -300,6 +305,7 @@ class WikipediaTextParser(HTMLParser):
         self._append_inline_text(text)
 
     def get_text(self) -> str:
+        # Returns the joined parser output with basic whitespace and punctuation cleanup.
         text = "".join(self._parts)
         text = re.sub(r"[ \t]+\n", "\n", text)
         text = re.sub(r"\n[ \t]+", "\n", text)
@@ -308,6 +314,7 @@ class WikipediaTextParser(HTMLParser):
         return text.strip()
 
     def _add_break(self) -> None:
+        # Inserts a paragraph break without producing duplicate blank lines.
         self._pending_reference_separator = False
         self._pending_subscript_separator = False
         if not self._parts:
@@ -321,6 +328,7 @@ class WikipediaTextParser(HTMLParser):
         self._parts.append("\n\n")
 
     def _flush_heading(self) -> None:
+        # Emits a collected heading in the shared == Heading == format.
         if self._heading_buffer is None:
             return
         heading = re.sub(r"\s+", " ", "".join(self._heading_buffer)).strip()
@@ -332,6 +340,7 @@ class WikipediaTextParser(HTMLParser):
         self._add_break()
 
     def _flush_reference_marker(self) -> None:
+        # Emits a collected inline citation marker such as [1] for references export mode.
         if self._reference_marker_buffer is None:
             return
         marker = re.sub(r"\s+", "", "".join(self._reference_marker_buffer))
@@ -345,18 +354,21 @@ class WikipediaTextParser(HTMLParser):
         self._pending_reference_separator = True
 
     def _append_inline_marker(self, marker: str) -> None:
+        # Appends generated inline markers like ^ or _ to the active output buffer.
         if self._heading_buffer is not None:
             self._heading_buffer.append(marker)
             return
         self._parts.append(marker)
 
     def _append_inline_text(self, text: str) -> None:
+        # Appends normal text to either a heading buffer or the main output parts.
         if self._heading_buffer is not None:
             self._heading_buffer.append(text)
             return
         self._parts.append(text)
 
     def _append_pending_space(self) -> None:
+        # Restores meaningful whitespace that appears after a removed reference marker.
         target = self._heading_buffer if self._heading_buffer is not None else self._parts
         if not target:
             return
@@ -366,6 +378,7 @@ class WikipediaTextParser(HTMLParser):
         target.append(" ")
 
     def _close_math_tag(self, tag: str) -> bool:
+        # Tracks when a math container closes so normal subscript behavior can resume.
         if self._math_tag_stack and self._math_tag_stack[-1] == tag:
             self._math_tag_stack.pop()
             self._math_depth -= 1
@@ -374,6 +387,7 @@ class WikipediaTextParser(HTMLParser):
 
 
 def is_non_word_glyph(value: str) -> bool:
+    # Allows only symbol-like file titles, preventing descriptive image titles from leaking.
     return bool(value.strip()) and not re.search(r"\w", value)
 
 
@@ -384,6 +398,7 @@ class WikipediaReferencesParser(HTMLParser):
     BLOCK_TAGS = {"br", "div", "li", "p"}
 
     def __init__(self) -> None:
+        # Initializes parser state for collecting only numeric reference-list entries.
         super().__init__(convert_charrefs=True)
         self.references: list[str] = []
         self._in_reference_list = False
@@ -393,6 +408,7 @@ class WikipediaReferencesParser(HTMLParser):
         self._current_parts: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # Enters numeric References lists and skips backlink/editing noise inside citations.
         attr_map = {name: value or "" for name, value in attrs}
         classes = set(attr_map.get("class", "").split())
 
@@ -426,6 +442,7 @@ class WikipediaReferencesParser(HTMLParser):
                 self._append_reference_text(" ")
 
     def handle_endtag(self, tag: str) -> None:
+        # Leaves citation list/items and flushes completed references into numbered text.
         if self._skip_depth:
             self._skip_depth -= 1
             return
@@ -445,15 +462,18 @@ class WikipediaReferencesParser(HTMLParser):
             self._append_reference_text(" ")
 
     def handle_data(self, data: str) -> None:
+        # Collects visible citation text while inside a numeric reference item.
         if self._skip_depth or not self._li_depth:
             return
         self._append_reference_text(data)
 
     def _append_reference_text(self, text: str) -> None:
+        # Adds raw citation fragments before final reference text normalization.
         if self._current_parts is not None:
             self._current_parts.append(text)
 
     def _flush_reference(self) -> None:
+        # Normalizes one completed citation and assigns its output number.
         if self._current_parts is None:
             return
         text = clean_reference_text("".join(self._current_parts))
@@ -463,12 +483,14 @@ class WikipediaReferencesParser(HTMLParser):
 
 
 def clean_reference_text(text: str) -> str:
+    # Collapses citation whitespace and fixes punctuation spacing.
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     return text.strip()
 
 
 def page_request_from_url(url: str) -> PageRequest:
+    # Converts a Wikipedia URL into the internal title/language request object.
     parsed = urlparse(url)
     host_parts = parsed.netloc.split(".")
     if len(host_parts) < 3 or host_parts[-2:] != ["wikipedia", "org"]:
@@ -482,6 +504,7 @@ def page_request_from_url(url: str) -> PageRequest:
 
 
 def fetch_page_html(page: PageRequest) -> str:
+    # Fetches rendered article HTML through the Wikipedia parse API.
     query = (
         f"?action=parse&page={quote(page.title)}&prop=text&format=json"
         "&formatversion=2&redirects=1"
@@ -504,6 +527,7 @@ def fetch_page_html(page: PageRequest) -> str:
 
 
 def fetch_page_extract(page: PageRequest) -> str:
+    # Fetches plain extract text through the Wikipedia extracts API.
     query = (
         f"?action=query&prop=extracts&explaintext=1&titles={quote(page.title)}"
         "&format=json&formatversion=2&redirects=1"
@@ -530,13 +554,16 @@ def fetch_page_extract(page: PageRequest) -> str:
 
 
 def normalize_latex(latex: str) -> str:
+    # Cleans LaTeX spacing and normalizes text macros for exported math.
     latex = re.sub(r"\s+", " ", latex)
     latex = latex.replace(r"\text{", r"\mathrm{")
     return latex.strip().rstrip(",.;:")
 
 
 def repair_compact_power_notation(text: str) -> str:
+    # Repairs compact exponent text like 8 (=23) into 8 (=2^3) when inferable.
     def replace(match: re.Match[str]) -> str:
+        # Tests possible base/exponent splits and returns the first exact match.
         value = int(match.group("value"))
         compact = match.group("compact")
         for split_at in range(1, len(compact)):
@@ -550,6 +577,7 @@ def repair_compact_power_notation(text: str) -> str:
 
 
 def lower_alpha_label(index: int) -> str:
+    # Converts 1-based indexes into lower-alpha labels: a, b, ..., z, aa.
     label = ""
     while index > 0:
         index -= 1
@@ -559,6 +587,7 @@ def lower_alpha_label(index: int) -> str:
 
 
 def remove_unwanted_sections(text: str) -> str:
+    # Drops unwanted terminal sections while keeping Notes available for HTML output.
     lines = text.splitlines()
     kept: list[str] = []
     skip_level: int | None = None
@@ -590,6 +619,7 @@ def remove_unwanted_sections(text: str) -> str:
 
 
 def clean_leading_caret_markers(text: str) -> str:
+    # Removes leading backlink markers such as ^, ^a, or ^a^b from note lines.
     cleaned_lines = []
     for line in text.splitlines():
         stripped = line.lstrip()
@@ -615,6 +645,7 @@ def clean_leading_caret_markers(text: str) -> str:
 
 
 def normalize_section_headings(text: str) -> str:
+    # Normalizes any wiki heading level into the shared == Heading == output format.
     lines: list[str] = []
     for line in text.splitlines():
         heading = SECTION_HEADING_PATTERN.match(line)
@@ -626,6 +657,7 @@ def normalize_section_headings(text: str) -> str:
 
 
 def section_title_from_line(line: str) -> str:
+    # Extracts a casefolded section title from either formatted or plain heading text.
     heading = SECTION_HEADING_PATTERN.match(line)
     if heading:
         return heading.group(2).strip().casefold()
@@ -633,6 +665,7 @@ def section_title_from_line(line: str) -> str:
 
 
 def format_heading_spacing(text: str) -> str:
+    # Ensures formatted headings have one blank line above for readability.
     lines = text.splitlines()
     formatted: list[str] = []
     for line in lines:
@@ -649,6 +682,7 @@ def format_heading_spacing(text: str) -> str:
 
 
 def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
+    # Detects rendered math fragments that should disappear in remove/latex modes.
     stripped = paragraph.strip()
     if not stripped:
         return False
@@ -672,6 +706,7 @@ def paragraph_looks_like_math_fragment(paragraph: str) -> bool:
 
 
 def line_looks_like_rendered_math(line: str) -> bool:
+    # Detects short rendered-math lines used to clean duplicated LaTeX context.
     stripped = line.strip().rstrip(",.;:")
     if not stripped:
         return True
@@ -687,6 +722,7 @@ def line_looks_like_rendered_math(line: str) -> bool:
 
 
 def clean_latex_context_segment(segment: str) -> str:
+    # Keeps prose around LaTeX formulas while dropping duplicated rendered math lines.
     lines: list[str] = []
     for line in segment.splitlines():
         stripped = line.strip()
@@ -703,6 +739,7 @@ def clean_latex_context_segment(segment: str) -> str:
 
 
 def replace_displaystyle_latex(paragraph: str, math_mode: str) -> tuple[str, bool]:
+    # Replaces MediaWiki displaystyle blocks with clean LaTeX or removes them.
     parts: list[str] = []
     marker = r"{\displaystyle"
     start = 0
@@ -749,6 +786,7 @@ def replace_displaystyle_latex(paragraph: str, math_mode: str) -> tuple[str, boo
 
 
 def clean_math(text: str, math_mode: str) -> str:
+    # Applies the selected math policy: remove, latex, or keep.
     if math_mode not in {"remove", "latex", "keep"}:
         raise ValueError(f"Unsupported math mode: {math_mode}")
     if math_mode == "keep":
@@ -769,6 +807,7 @@ def clean_math(text: str, math_mode: str) -> str:
 def clean_plain_text(
     text: str, math_mode: str = "remove", remove_inline_references: bool = True
 ) -> str:
+    # Runs shared text cleanup used by both extracts and HTML paths.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = remove_unwanted_sections(text)
     text = clean_leading_caret_markers(text)
@@ -788,6 +827,7 @@ def clean_plain_text(
 
 
 def clean_wikipedia_html(html: str, math_mode: str = "remove") -> str:
+    # Converts Wikipedia HTML to clean article text without inline citation numbers.
     parser = WikipediaTextParser()
     parser.feed(html)
     parser.close()
@@ -795,6 +835,7 @@ def clean_wikipedia_html(html: str, math_mode: str = "remove") -> str:
 
 
 def extract_references_from_html(html: str) -> str:
+    # Extracts numeric References entries into a separate formatted section.
     parser = WikipediaReferencesParser()
     parser.feed(html)
     parser.close()
@@ -806,6 +847,7 @@ def extract_references_from_html(html: str) -> str:
 def clean_wikipedia_html_with_references(
     html: str, math_mode: str = "remove"
 ) -> str:
+    # Builds an HTML-derived article copy with inline citation markers plus References.
     parser = WikipediaTextParser(include_reference_markers=True)
     parser.feed(html)
     parser.close()
@@ -817,6 +859,7 @@ def clean_wikipedia_html_with_references(
 
 
 def extract_note_section(text: str) -> str:
+    # Returns the Note/Notes section text if present in formatted or plain form.
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if section_title_from_line(line) in {"note", "notes"}:
@@ -825,6 +868,7 @@ def extract_note_section(text: str) -> str:
 
 
 def note_section_has_body(text: str) -> bool:
+    # Checks whether a Note/Notes section has content beyond just the heading.
     note_section = extract_note_section(text)
     if not note_section:
         return False
@@ -833,6 +877,7 @@ def note_section_has_body(text: str) -> bool:
 
 
 def remove_empty_note_section(text: str) -> str:
+    # Removes a trailing empty Note/Notes heading from extracts output.
     if note_section_has_body(text):
         return text
     return re.sub(
@@ -844,16 +889,19 @@ def remove_empty_note_section(text: str) -> str:
 
 
 def extract_text_from_extracts_api(page: PageRequest, math_mode: str = "remove") -> str:
+    # Fetches and cleans text from the extracts API, then drops empty Notes.
     text = clean_plain_text(fetch_page_extract(page), math_mode)
     return remove_empty_note_section(text)
 
 
 
 def extract_text_from_html(page: PageRequest, math_mode: str = "remove") -> str:
+    # Fetches and cleans text from rendered HTML parsing.
     return clean_wikipedia_html(fetch_page_html(page), math_mode)
 
 
 def extract_text(page: PageRequest, method: str = "extracts", math_mode: str = "remove") -> str:
+    # Dispatches to the selected extraction method with the requested math policy.
     if method == "extracts":
         return extract_text_from_extracts_api(page, math_mode)
     if method == "html":
@@ -862,6 +910,7 @@ def extract_text(page: PageRequest, method: str = "extracts", math_mode: str = "
 
 
 def output_path_for_method(output: str, method: str, split_methods: bool) -> Path:
+    # Legacy helper that optionally appends a method suffix beside an output path.
     path = Path(output)
     if not split_methods:
         return path
@@ -870,6 +919,7 @@ def output_path_for_method(output: str, method: str, split_methods: bool) -> Pat
 
 
 def safe_filename_part(value: str) -> str:
+    # Converts page titles/language values into filesystem-safe path components.
     value = value.strip().replace(" ", "_")
     value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
     value = re.sub(r"_+", "_", value)
@@ -877,49 +927,59 @@ def safe_filename_part(value: str) -> str:
 
 
 def topic_folder_name(page: PageRequest) -> str:
+    # Uses the safe page title as the topic folder name.
     return safe_filename_part(page.title)
 
 
 def topic_file_stem(page: PageRequest) -> str:
+    # Uses a lowercase safe page title as the output file stem.
     return topic_folder_name(page).lower()
 
 
 def language_folder_name(lang: str) -> str:
+    # Maps known language codes to readable folder names and falls back to the code.
     return LANGUAGE_FOLDER_NAMES.get(lang.lower(), lang.lower())
 
 
 def output_directory(output: str, page: PageRequest) -> Path:
+    # Builds the shared output/<Topic>/<Language> directory path.
     path = Path(output)
     root = path.parent if path.suffix else path
     return root / topic_folder_name(page) / language_folder_name(page.lang)
 
 
 def extraction_output_path(output: str, page: PageRequest, method: str, math_mode: str) -> Path:
+    # Builds the text output path for a method/math combination.
     suffix = Path(output).suffix or ".txt"
     return output_directory(output, page) / f"{topic_file_stem(page)}_{method}_{math_mode}{suffix}"
 
 
 def comparison_output_path(output: str, page: PageRequest) -> Path:
+    # Builds the remove-mode comparison report path.
     suffix = Path(output).suffix or ".txt"
     return output_directory(output, page) / f"{topic_file_stem(page)}_comparison{suffix}"
 
 
 def runtime_output_path(output: str, page: PageRequest) -> Path:
+    # Builds the runtime report path shared by single and combined runners.
     suffix = Path(output).suffix or ".txt"
     return output_directory(output, page) / f"{topic_file_stem(page)}_runtime{suffix}"
 
 
 def raw_output_path(output: str, page: PageRequest, source: str) -> Path:
+    # Builds the raw API debug output path for extracts or HTML.
     suffix = Path(output).suffix or ".txt"
     return output_directory(output, page) / f"{topic_file_stem(page)}_raw_{source}{suffix}"
 
 
 def references_output_path(output: str, page: PageRequest) -> Path:
+    # Builds the optional HTML references export path.
     suffix = Path(output).suffix or ".txt"
     return output_directory(output, page) / f"{topic_file_stem(page)}_html_references{suffix}"
 
 
 def write_text_file(path: Path, text: str) -> None:
+    # Writes UTF-8 text after creating any missing output directories.
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text + "\n", encoding="utf-8")
 
@@ -927,12 +987,14 @@ def write_text_file(path: Path, text: str) -> None:
 def run_extraction(
     page: PageRequest, method: str, math_mode: str = "remove"
 ) -> tuple[str, float]:
+    # Runs one extraction and returns both its text and elapsed seconds.
     started_at = time.perf_counter()
     text = extract_text(page, method, math_mode)
     return text, time.perf_counter() - started_at
 
 
 def compare_texts(extracts_text: str, html_text: str) -> str:
+    # Produces a character/line mismatch summary plus a unified diff.
     extracts_lines = extracts_text.splitlines()
     html_lines = html_text.splitlines()
     diff = list(
@@ -963,6 +1025,7 @@ def compare_texts(extracts_text: str, html_text: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Defines the legacy shared CLI that can run extracts, HTML, or both.
     parser = argparse.ArgumentParser(
         description="Extract clean plain text from a Wikipedia page."
     )
@@ -987,10 +1050,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
+    # Parses legacy CLI arguments, allowing tests to pass an explicit argv.
     return build_parser().parse_args(argv)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    # Runs the legacy CLI, writes requested outputs, or prints text to stdout.
     args = parse_args(argv)
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
     methods = ("extracts", "html") if args.method == "both" else (args.method,)

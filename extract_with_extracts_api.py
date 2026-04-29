@@ -17,6 +17,7 @@ from wiki_text_extractor import (
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Defines the extracts-only CLI and the math/output options it supports.
     parser = argparse.ArgumentParser(
         description="Extract clean Wikipedia text using prop=extracts."
     )
@@ -40,14 +41,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    # Parses command arguments and resolves either a URL or title into a PageRequest.
     args = build_parser().parse_args(argv)
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
 
     try:
+        # Runs the extracts API method and records how long that single extraction took.
         text, seconds = run_extraction(page, "extracts", args.math)
+        # Uses the shared topic/language folder layout for the cleaned extracts output.
         output_path = extraction_output_path(args.output, page, "extracts", args.math)
         runtime_path = runtime_output_path(args.output, page)
         write_text_file(output_path, text)
+        # Updates the shared runtime file with the latest extracts-only run.
         write_text_file(
             runtime_path,
             "\n".join(

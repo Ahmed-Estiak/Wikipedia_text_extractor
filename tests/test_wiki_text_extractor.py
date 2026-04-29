@@ -22,6 +22,7 @@ from wiki_text_extractor import (
 
 class CleanWikipediaHtmlTests(unittest.TestCase):
     def test_removes_references_infoboxes_and_tables(self):
+        # Verifies noisy Wikipedia blocks and citation markers are removed from HTML output.
         html = """
         <div class="mw-parser-output">
           <table class="infobox"><tr><td>Hidden infobox</td></tr></table>
@@ -39,6 +40,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
 
     def test_preserves_non_reference_superscripts(self):
+        # Verifies real superscripts are kept as caret notation instead of being treated as citations.
         html = """
         <div class="mw-parser-output">
           <p>There are 8 (=2<sup>3</sup>) examples at 90&deg;.</p>
@@ -51,6 +53,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
 
     def test_preserves_space_after_removed_reference_superscripts(self):
+        # Verifies removing citation superscripts does not join neighboring words or punctuation.
         html = """
         <div class="mw-parser-output">
           <p>That suggests not many are.<sup class="reference">[1]</sup> Orcus follows.</p>
@@ -69,6 +72,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
 
     def test_preserves_non_math_subscripts_with_underscores(self):
+        # Verifies normal HTML subscripts become underscore notation and split following letters.
         html = """
         <div class="mw-parser-output">
           <p>Water is H<sub>2</sub>O and hydrogen sulfide is H<sub>2</sub>S.</p>
@@ -82,6 +86,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
 
     def test_does_not_add_subscript_underscores_inside_math_html(self):
+        # Verifies math containers keep their own formatting and do not get extra subscript markers.
         html = """
         <div class="mw-parser-output">
           <span class="mwe-math-element">x<sub>i</sub></span>
@@ -96,6 +101,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("H_2_O", cleaned)
 
     def test_removes_image_captions_and_map_labels(self):
+        # Verifies figures, thumbnails, map labels, and noexcerpt blocks stay out of clean text.
         html = """
         <div class="mw-parser-output">
           <figure>
@@ -115,6 +121,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
 
     def test_preserves_inline_file_symbols_from_titles(self):
+        # Verifies inline glyph images keep symbol titles while descriptive image titles are ignored.
         html = """
         <div class="mw-parser-output">
           <p>Ceres <span class="skin-invert" typeof="mw:File">
@@ -142,12 +149,14 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("Hidden figure symbol", text)
 
     def test_extracts_language_and_title_from_url(self):
+        # Verifies Wikipedia URL parsing returns the language code and page title.
         page = page_request_from_url("https://en.wikipedia.org/wiki/Albert_Einstein")
 
         self.assertEqual(page.lang, "en")
         self.assertEqual(page.title, "Albert Einstein")
 
     def test_cleans_extracts_api_plain_text_noise(self):
+        # Verifies plain extracts text cleanup removes refs, empty parentheses, and unwanted sections.
         text = """
         Saturn ( ) is a planet.[1]
 
@@ -173,6 +182,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
 
     def test_removes_selected_sections_but_keeps_notes(self):
+        # Verifies See also/References/External links are removed while Notes content remains.
         text = """
         Article body.
 
@@ -210,6 +220,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("Hidden link.", cleaned)
 
     def test_removes_plain_html_sections_but_keeps_plain_notes(self):
+        # Verifies plain heading text from HTML is handled when section markers are not present.
         text = """
         Article body.
 
@@ -235,6 +246,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("Hidden reference.", cleaned)
 
     def test_note_section_helpers_detect_missing_body_and_keep_list_labels(self):
+        # Verifies Note helper functions remove empty notes but preserve a./b. list labels.
         self.assertFalse(note_section_has_body("Article body.\n\nNote"))
         self.assertFalse(note_section_has_body("Article body.\n\n== Note =="))
         self.assertTrue(note_section_has_body("Article body.\n\n== Note ==\n\na. Visible note."))
@@ -245,6 +257,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
 
     def test_html_parser_removes_section_content_by_heading_id(self):
+        # Verifies HTML heading IDs trigger full unwanted-section removal while Note remains.
         html = """
         <div class="mw-parser-output">
           <p>Article body.</p>
@@ -266,6 +279,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("Hidden reference.", cleaned)
 
     def test_html_parser_formats_any_heading_level(self):
+        # Verifies all HTML heading levels are normalized to the readable == Heading == format.
         html = """
         <div class="mw-parser-output">
           <p>Article body.</p>
@@ -282,6 +296,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Section body.\n\n== Discovery ==\n\nSubsection body.", cleaned)
 
     def test_html_parser_generates_decimal_ordered_list_labels(self):
+        # Verifies normal ordered lists produce numeric labels, including start offsets.
         html = """
         <div class="mw-parser-output">
           <p>In order of discovery, these bodies are:</p>
@@ -306,6 +321,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("5. Makemake", cleaned)
 
     def test_html_parser_generates_lower_alpha_note_labels(self):
+        # Verifies lower-alpha note references keep a./b. labels and drop backlink markers.
         html = """
         <div class="mw-parser-output">
           <div class="mw-heading mw-heading2"><h2 id="Note">Note</h2></div>
@@ -325,6 +341,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("^", cleaned)
 
     def test_html_references_export_keeps_markers_and_numeric_references(self):
+        # Verifies optional references export keeps inline markers and appends numeric references.
         html = """
         <div class="mw-parser-output">
           <p>Article text.<sup class="reference"><a><span>[</span>1<span>]</span></a></sup> More text.</p>
@@ -350,16 +367,19 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("3. A note, not a numeric reference.", text)
 
     def test_lower_alpha_label_handles_multiple_letters(self):
+        # Verifies lower-alpha label generation continues past z.
         self.assertEqual(lower_alpha_label(1), "a")
         self.assertEqual(lower_alpha_label(26), "z")
         self.assertEqual(lower_alpha_label(27), "aa")
 
     def test_output_path_for_both_methods_adds_method_suffix(self):
+        # Verifies legacy method-splitting path helper appends the method suffix.
         path = output_path_for_method("output/saturn.txt", "html", split_methods=True)
 
         self.assertEqual(path, Path("output/saturn_html.txt"))
 
     def test_nested_output_paths_include_topic_and_language(self):
+        # Verifies generated output paths are grouped by topic and language folders.
         page = page_request_from_url("https://en.wikipedia.org/wiki/Kuiper_belt")
 
         self.assertEqual(
@@ -384,6 +404,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
 
     def test_compare_texts_reports_mismatch(self):
+        # Verifies comparison reports include exact-match status and unified diff lines.
         report = compare_texts("Line one\nLine two", "Line one\nLine three")
 
         self.assertIn("Exact match: False", report)
@@ -391,6 +412,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("+Line three", report)
 
     def test_math_remove_drops_displaystyle_and_fragments(self):
+        # Verifies math remove mode drops displaystyle formulas and rendered math fragments.
         text = "\n\n".join(
             [
                 "The objects follow this relation:",
@@ -407,6 +429,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(cleaned, "The objects follow this relation:\n\nNormal text remains.")
 
     def test_math_latex_keeps_clean_latex(self):
+        # Verifies math latex mode keeps clean LaTeX while removing duplicated rendered math.
         text = "\n".join(
             [
                 "The objects follow this relation:",
@@ -431,6 +454,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("a constant.", cleaned)
 
     def test_math_keep_preserves_raw_displaystyle(self):
+        # Verifies math keep mode leaves raw displaystyle markup untouched.
         text = "{\\displaystyle N\\propto D^{1-q}}"
 
         self.assertIn("{\\displaystyle", clean_plain_text(text, math_mode="keep"))

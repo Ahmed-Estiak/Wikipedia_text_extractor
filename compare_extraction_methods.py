@@ -26,6 +26,7 @@ from wiki_text_extractor import (
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Defines the combined CLI for running both extractors, debug outputs, and reports.
     parser = argparse.ArgumentParser(
         description="Run both Wikipedia extractors and compare their text output."
     )
@@ -59,11 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    # Parses command arguments, resolves the requested page, and expands math=all.
     args = build_parser().parse_args(argv)
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
     math_modes = MATH_MODES if args.math == "all" else (args.math,)
 
     try:
+        # Runs every requested method/math combination and keeps both text and runtime.
         results = {
             (method, math_mode): run_extraction(page, method, math_mode)
             for math_mode in math_modes
@@ -73,6 +76,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    # Writes the normal extractor outputs, e.g. extracts/html with remove/latex/keep.
     for (method, math_mode), (text, _seconds) in results.items():
         path = extraction_output_path(args.output, page, method, math_mode)
         write_text_file(path, text)
@@ -80,6 +84,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if args.save_raw:
         try:
+            # Saves raw API responses so parser/cleaning issues can be inspected later.
             raw_extracts_path = raw_output_path(args.output, page, "extracts")
             raw_html_path = raw_output_path(args.output, page, "html")
             write_text_file(raw_extracts_path, fetch_page_extract(page))
@@ -92,6 +97,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if args.save_references:
         try:
+            # Saves a separate HTML-only output with inline citation numbers and References.
             references_path = references_output_path(args.output, page)
             write_text_file(
                 references_path,
@@ -104,11 +110,13 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     comparison_path = comparison_output_path(args.output, page)
     if "remove" in math_modes:
+        # Comparison is intentionally limited to remove mode, the cleanest text baseline.
         extracts_remove = results[("extracts", "remove")][0]
         html_remove = results[("html", "remove")][0]
         write_text_file(comparison_path, compare_texts(extracts_remove, html_remove))
         print(f"Saved remove-mode comparison report: {comparison_path}")
 
+    # Builds a runtime report for each requested math mode and both extraction methods.
     runtime_lines = ["Wikipedia Text Extraction Runtime", "", f"Math mode request: {args.math}"]
     for math_mode in math_modes:
         extracts_seconds = results[("extracts", math_mode)][1]

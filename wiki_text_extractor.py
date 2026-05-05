@@ -45,6 +45,32 @@ class PageRequest:
     lang: str = "en"
 
 
+@dataclass(frozen=True)
+class FuzzyBoundaryMatch:
+    # Records where one pasted-text boundary was found inside the cleaned article.
+    anchor: str
+    score: float
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class PartialExtractionResult:
+    # Carries the extracted section and the boundary match diagnostics.
+    text: str
+    start_match: FuzzyBoundaryMatch
+    end_match: FuzzyBoundaryMatch
+    threshold: float
+
+
+class PartialExtractionError(ValueError):
+    """Raised when pasted text cannot be matched reliably enough."""
+
+    def __init__(self, message: str, report_text: str) -> None:
+        super().__init__(message)
+        self.report_text = report_text
+
+
 class WikipediaTextParser(HTMLParser):
     """Small HTML-to-text parser tuned for Wikipedia article HTML."""
 
@@ -858,6 +884,274 @@ def clean_wikipedia_html_with_references(
     return "\n\n".join(part for part in (body, references) if part).strip()
 
 
+def normalize_for_match(text: str) -> str:
+    # Builds a forgiving comparison string for pasted browser text and cleaned output.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = INLINE_REFERENCE_PATTERN.sub("", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.casefold().strip()
+
+
+def normalize_match_index_map(text: str) -> tuple[str, list[int]]:
+    # Normalizes text while keeping a map back to original character offsets.
+    normalized: list[str] = []
+    index_map: list[int] = []
+    previous_was_space = False
+    for index, char in enumerate(text):
+        if char.isspace():
+            if normalized and not previous_was_space:
+                normalized.append(" ")
+                index_map.append(index)
+            previous_was_space = True
+            continue
+        for folded_char in char.casefold():
+            normalized.append(folded_char)
+            index_map.append(index)
+        previous_was_space = False
+    return "".join(normalized), index_map
+
+
+def line_looks_like_partial_noise(line: str) -> bool:
+    # Flags copied edge lines that commonly come from tables, captions, maps, or controls.
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if len(stripped) < 40:
+        return True
+    letters = sum(1 for char in stripped if char.isalpha())
+    visible = sum(1 for char in stripped if not char.isspace())
+    if visible and letters / visible < 0.30:
+        return True
+    lower = stripped.casefold()
+    if lower in {"edit", "source", "map", "image"}:
+        return True
+    return False
+
+
+def meaningful_partial_units(text: str) -> list[str]:
+    # Keeps paragraph-like pasted chunks that are useful as fuzzy anchors.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = re.split(r"\n\s*\n+", text)
+    units: list[str] = []
+    for paragraph in paragraphs:
+        lines = [
+            line.strip()
+            for line in paragraph.splitlines()
+            if not line_looks_like_partial_noise(line)
+        ]
+        if not lines:
+            continue
+        unit = " ".join(lines)
+        if len(normalize_for_match(unit)) >= 45:
+            units.append(unit)
+    if units:
+        return units
+
+    fallback = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    return [fallback] if fallback else []
+
+
+def strong_anchor_candidates(
+    pasted_text: str,
+    side: str,
+    anchor_size: int = 300,
+    max_candidates: int = 5,
+) -> list[str]:
+    # Takes several strong start/end anchors so noisy copied edges can be skipped.
+    units = meaningful_partial_units(pasted_text)
+    if side == "end":
+        units = list(reversed(units))
+    candidates: list[str] = []
+    for unit in units:
+        normalized = normalize_for_match(unit)
+        if not normalized:
+            continue
+        anchor = unit[:anchor_size] if side == "start" else unit[-anchor_size:]
+        if normalize_for_match(anchor) and anchor not in candidates:
+            candidates.append(anchor)
+        if len(candidates) >= max_candidates:
+            break
+
+    if not candidates:
+        stripped = pasted_text.strip()
+        anchor = stripped[:anchor_size] if side == "start" else stripped[-anchor_size:]
+        if anchor:
+            candidates.append(anchor)
+    return candidates
+
+
+def fuzzy_ratio(left: str, right: str) -> float:
+    # Uses the standard library to avoid adding a dependency for boundary matching.
+    return difflib.SequenceMatcher(None, left, right).ratio()
+
+
+def original_span_from_normalized(
+    index_map: list[int], normalized_start: int, normalized_end: int
+) -> tuple[int, int]:
+    # Converts a normalized match span back to offsets in the cleaned article text.
+    if not index_map:
+        return 0, 0
+    normalized_start = max(0, min(normalized_start, len(index_map) - 1))
+    normalized_end = max(normalized_start + 1, min(normalized_end, len(index_map)))
+    return index_map[normalized_start], index_map[normalized_end - 1] + 1
+
+
+def find_fuzzy_boundary(full_text: str, anchor: str) -> FuzzyBoundaryMatch | None:
+    # Finds the best approximate location of one anchor in the cleaned article text.
+    normalized_anchor = normalize_for_match(anchor)
+    if not normalized_anchor:
+        return None
+
+    normalized_full, index_map = normalize_match_index_map(full_text)
+    exact_start = normalized_full.find(normalized_anchor)
+    if exact_start >= 0:
+        exact_end = exact_start + len(normalized_anchor)
+        start, end = original_span_from_normalized(index_map, exact_start, exact_end)
+        return FuzzyBoundaryMatch(anchor, 1.0, start, end)
+
+    base_size = len(normalized_anchor)
+    deltas = (-80, -40, 0, 40, 80)
+    window_sizes = sorted(
+        {
+            max(40, base_size + delta)
+            for delta in deltas
+            if max(40, base_size + delta) <= len(normalized_full)
+        }
+    )
+    if not window_sizes:
+        return None
+
+    step = max(15, min(80, base_size // 4 or 15))
+    best_score = -1.0
+    best_span = (0, 0)
+    for window_size in window_sizes:
+        limit = len(normalized_full) - window_size
+        for start_index in range(0, limit + 1, step):
+            window = normalized_full[start_index : start_index + window_size]
+            score = fuzzy_ratio(normalized_anchor, window)
+            if score > best_score:
+                best_score = score
+                best_span = (start_index, start_index + window_size)
+        if limit > 0:
+            window = normalized_full[limit : limit + window_size]
+            score = fuzzy_ratio(normalized_anchor, window)
+            if score > best_score:
+                best_score = score
+                best_span = (limit, limit + window_size)
+
+    start, end = original_span_from_normalized(index_map, best_span[0], best_span[1])
+    return FuzzyBoundaryMatch(anchor, best_score, start, end)
+
+
+def shorten_report_anchor(anchor: str, limit: int = 180) -> str:
+    # Keeps debug reports readable even when anchors are long.
+    anchor = re.sub(r"\s+", " ", anchor).strip()
+    if len(anchor) <= limit:
+        return anchor
+    return anchor[: limit - 3] + "..."
+
+
+def format_partial_match_report(
+    result: PartialExtractionResult | None,
+    threshold: float,
+    message: str = "success",
+    start_candidates: list[str] | None = None,
+    end_candidates: list[str] | None = None,
+) -> str:
+    # Writes a human-readable report so failed fuzzy matches can be debugged quickly.
+    lines = [
+        "Wikipedia Partial HTML Extraction Match Report",
+        "",
+        f"Status: {message}",
+        f"Threshold: {threshold:.3f}",
+    ]
+    if result:
+        lines.extend(
+            [
+                f"Start score: {result.start_match.score:.3f}",
+                f"End score: {result.end_match.score:.3f}",
+                f"Output characters: {len(result.text)}",
+                "",
+                f"Start anchor: {shorten_report_anchor(result.start_match.anchor)}",
+                f"End anchor: {shorten_report_anchor(result.end_match.anchor)}",
+            ]
+        )
+    if start_candidates is not None:
+        lines.extend(["", "Start candidates:"])
+        lines.extend(f"- {shorten_report_anchor(candidate)}" for candidate in start_candidates)
+    if end_candidates is not None:
+        lines.extend(["", "End candidates:"])
+        lines.extend(f"- {shorten_report_anchor(candidate)}" for candidate in end_candidates)
+    return "\n".join(lines).strip()
+
+
+def extract_partial_text(
+    full_text: str,
+    pasted_text: str,
+    threshold: float = 0.92,
+    anchor_size: int = 300,
+    max_candidates: int = 5,
+) -> PartialExtractionResult:
+    # Extracts a clean section by matching pasted start/end anchors against clean HTML text.
+    start_candidates = strong_anchor_candidates(
+        pasted_text, "start", anchor_size, max_candidates
+    )
+    end_candidates = strong_anchor_candidates(
+        pasted_text, "end", anchor_size, max_candidates
+    )
+    start_matches = [
+        (index, match)
+        for index, anchor in enumerate(start_candidates)
+        if (match := find_fuzzy_boundary(full_text, anchor))
+    ]
+    end_matches = [
+        (index, match)
+        for index, anchor in enumerate(end_candidates)
+        if (match := find_fuzzy_boundary(full_text, anchor))
+    ]
+
+    valid_pairs: list[
+        tuple[int, int, float, int, FuzzyBoundaryMatch, FuzzyBoundaryMatch]
+    ] = []
+    for start_index, start_match in start_matches:
+        for end_index, end_match in end_matches:
+            if start_match.start > end_match.end:
+                continue
+            if start_match.score < threshold or end_match.score < threshold:
+                continue
+            average_score = (start_match.score + end_match.score) / 2
+            extracted_length = end_match.end - start_match.start
+            valid_pairs.append(
+                (
+                    -start_index,
+                    -end_index,
+                    average_score,
+                    extracted_length,
+                    start_match,
+                    end_match,
+                )
+            )
+
+    if not valid_pairs:
+        best_start = max((match.score for _, match in start_matches), default=0.0)
+        best_end = max((match.score for _, match in end_matches), default=0.0)
+        message = (
+            "failed: could not find reliable start/end boundaries "
+            f"(best start {best_start:.3f}, best end {best_end:.3f})"
+        )
+        report_text = format_partial_match_report(
+            None, threshold, message, start_candidates, end_candidates
+        )
+        raise PartialExtractionError(message, report_text)
+
+    _, _, _, _, start_match, end_match = max(
+        valid_pairs, key=lambda item: (item[0], item[1], item[2], item[3])
+    )
+    text = full_text[start_match.start : end_match.end].strip()
+    return PartialExtractionResult(text, start_match, end_match, threshold)
+
+
 def extract_note_section(text: str) -> str:
     # Returns the Note/Notes section text if present in formatted or plain form.
     lines = text.splitlines()
@@ -976,6 +1270,16 @@ def references_output_path(output: str, page: PageRequest) -> Path:
     # Builds the optional HTML references export path.
     suffix = Path(output).suffix or ".txt"
     return output_directory(output, page) / f"{topic_file_stem(page)}_html_references{suffix}"
+
+
+def partial_output_path(output: str, page: PageRequest) -> Path:
+    # Builds the fixed partial extraction output path; each run overwrites this file.
+    return output_directory(output, page) / "partial_text.txt"
+
+
+def partial_match_report_path(output: str, page: PageRequest) -> Path:
+    # Builds the partial extraction debug report path.
+    return output_directory(output, page) / "partial_match_report.txt"
 
 
 def write_text_file(path: Path, text: str) -> None:

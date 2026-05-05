@@ -10,6 +10,10 @@ from wiki_text_extractor import (
     extraction_output_path,
     output_path_for_method,
     page_request_from_url,
+    partial_match_report_path,
+    partial_output_path,
+    extract_partial_text,
+    PartialExtractionError,
     runtime_output_path,
     references_output_path,
     extract_note_section,
@@ -366,6 +370,85 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("2. Second source.", text)
         self.assertNotIn("3. A note, not a numeric reference.", text)
 
+    def test_partial_extraction_matches_exact_clean_section(self):
+        # Verifies pasted text can extract the same section from already-clean HTML output.
+        full_text = (
+            "Lead paragraph.\n\n"
+            "Target section starts with a distinctive sentence.\n\n"
+            "It continues with enough detail to be a stable anchor.\n\n"
+            "The target section ends with another distinctive sentence.\n\n"
+            "Later article text."
+        )
+        pasted = (
+            "Target section starts with a distinctive sentence.\n\n"
+            "It continues with enough detail to be a stable anchor.\n\n"
+            "The target section ends with another distinctive sentence."
+        )
+
+        result = extract_partial_text(full_text, pasted, threshold=0.92, anchor_size=120)
+
+        self.assertEqual(result.text, pasted)
+        self.assertGreaterEqual(result.start_match.score, 0.92)
+        self.assertGreaterEqual(result.end_match.score, 0.92)
+
+    def test_partial_extraction_tolerates_refs_and_spacing(self):
+        # Verifies copied citation markers and whitespace differences do not block matching.
+        full_text = (
+            "Before text.\n\n"
+            "Ceres was discovered January 1, 1801, and announced January 24.\n\n"
+            "Pluto was discovered February 18, 1930, and announced March 13.\n\n"
+            "Eris was discovered January 5, 2005, and announced July 29.\n\n"
+            "After text."
+        )
+        pasted = (
+            "Ceres was discovered January 1, 1801, and announced January 24.[56]\n"
+            "Pluto was discovered February 18, 1930, and announced March 13.\n\n"
+            "Eris was discovered January 5, 2005, and announced July 29."
+        )
+
+        result = extract_partial_text(full_text, pasted, threshold=0.90, anchor_size=150)
+
+        self.assertIn("Ceres was discovered", result.text)
+        self.assertIn("Eris was discovered", result.text)
+        self.assertNotIn("[56]", result.text)
+
+    def test_partial_extraction_skips_noisy_copied_edges(self):
+        # Verifies table/caption-like copied edge lines are ignored when choosing anchors.
+        full_text = (
+            "Intro text.\n\n"
+            "The clean section begins with a paragraph that has enough normal words to match.\n\n"
+            "The middle paragraph keeps the selected content inside the extracted range.\n\n"
+            "The clean section ends with another paragraph that has enough normal words to match.\n\n"
+            "Footer text."
+        )
+        pasted = (
+            "12 34 56 | image map\n"
+            "Short caption\n\n"
+            "The clean section begins with a paragraph that has enough normal words to match.\n\n"
+            "The middle paragraph keeps the selected content inside the extracted range.\n\n"
+            "The clean section ends with another paragraph that has enough normal words to match.\n\n"
+            "90 88 77 | hidden table"
+        )
+
+        result = extract_partial_text(full_text, pasted, threshold=0.92, anchor_size=160)
+
+        self.assertTrue(result.text.startswith("The clean section begins"))
+        self.assertTrue(result.text.endswith("enough normal words to match."))
+        self.assertNotIn("Intro text.", result.text)
+        self.assertNotIn("Footer text.", result.text)
+
+    def test_partial_extraction_reports_threshold_failure(self):
+        # Verifies unreliable pasted text fails with a debuggable report instead of bad output.
+        with self.assertRaises(PartialExtractionError) as context:
+            extract_partial_text(
+                "A clean article with one body paragraph.",
+                "Completely unrelated pasted text that cannot match.",
+                threshold=0.99,
+            )
+
+        self.assertIn("failed", context.exception.report_text)
+        self.assertIn("Threshold: 0.990", context.exception.report_text)
+
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.
         self.assertEqual(lower_alpha_label(1), "a")
@@ -401,6 +484,14 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(
             references_output_path("output/kuiper_belt.txt", page),
             Path("output/Kuiper_belt/English/kuiper_belt_html_references.txt"),
+        )
+        self.assertEqual(
+            partial_output_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/partial_text.txt"),
+        )
+        self.assertEqual(
+            partial_match_report_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/partial_match_report.txt"),
         )
 
     def test_compare_texts_reports_mismatch(self):

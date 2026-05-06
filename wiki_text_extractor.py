@@ -21,6 +21,24 @@ API_TEMPLATE = "https://{lang}.wikipedia.org/w/api.php"
 USER_AGENT = "WikipediaTextExtractor/0.1"
 EXTRACTION_METHODS = ("extracts", "html")
 MATH_MODES = ("remove", "latex", "keep")
+MATH_IDENTIFIER_ALLOWLIST = {
+    "argmax",
+    "argmin",
+    "cos",
+    "exp",
+    "gelu",
+    "ln",
+    "log",
+    "max",
+    "min",
+    "pr",
+    "relu",
+    "sigmoid",
+    "sin",
+    "softmax",
+    "tan",
+    "tanh",
+}
 REMOVED_SECTION_TITLES = {"see also", "references", "external links"}
 REMOVED_SECTION_IDS = {"See_also", "References", "External_links"}
 PLAIN_SECTION_TITLES = REMOVED_SECTION_TITLES | {"note", "notes"}
@@ -836,7 +854,12 @@ def remove_inline_duplicate_latex_symbols(text: str) -> str:
     # Removes rendered one-letter symbols that duplicate adjacent inline LaTeX.
     def replace_duplicate(match: re.Match[str]) -> str:
         identifier = match.group(1)
-        if len(identifier) == 1 or len(identifier) <= 3 or re.search(r"[\d_]", identifier):
+        if (
+            len(identifier) == 1
+            or len(identifier) <= 3
+            or re.search(r"[\d_]", identifier)
+            or identifier.casefold() in MATH_IDENTIFIER_ALLOWLIST
+        ):
             return f"${identifier}$"
         return match.group(0)
 

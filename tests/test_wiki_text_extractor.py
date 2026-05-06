@@ -813,6 +813,13 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
                 "and NLL",
                 "$NLL$",
                 "are short math identifiers.",
+                "The activation is softmax",
+                "$softmax$",
+                "or sigmoid",
+                "$sigmoid$",
+                "or ReLU",
+                "$ReLU$",
+                "in some models.",
                 "But model",
                 "$model$",
                 "and language",
@@ -828,6 +835,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("context surrounds token $i$", cleaned)
         self.assertIn("The vector is $x_i$ and the token id is $token_i$", cleaned)
         self.assertIn("while $log$ and $NLL$ are short math identifiers.", cleaned)
+        self.assertIn(
+            "The activation is $softmax$ or $sigmoid$ or $ReLU$ in some models.",
+            cleaned,
+        )
         self.assertIn("But model $model$ and language $language$", cleaned)
         self.assertNotIn("N $N$", cleaned)
         self.assertNotIn("i $i$", cleaned)
@@ -835,6 +846,9 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("token_i $token_i$", cleaned)
         self.assertNotIn("log $log$", cleaned)
         self.assertNotIn("NLL $NLL$", cleaned)
+        self.assertNotIn("softmax $softmax$", cleaned)
+        self.assertNotIn("sigmoid $sigmoid$", cleaned)
+        self.assertNotIn("ReLU $ReLU$", cleaned)
         self.assertNotIn("\n$i$", cleaned)
 
     def test_math_keep_preserves_raw_displaystyle(self):

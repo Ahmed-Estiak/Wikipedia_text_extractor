@@ -183,6 +183,7 @@ class WikipediaTextParser(HTMLParser):
         self._sub_depth = 0
         self._reference_skip_depth = 0
         self._pending_reference_separator = False
+        self._pending_inline_space = False
         self._pending_subscript_separator = False
         self._math_depth = 0
         self._math_tag_stack: list[str] = []
@@ -345,6 +346,8 @@ class WikipediaTextParser(HTMLParser):
             if self._pending_reference_separator:
                 self._append_pending_space()
                 self._pending_reference_separator = False
+            elif data and any(char.isspace() for char in data):
+                self._pending_inline_space = True
             self._pending_subscript_separator = False
             return
         self._pending_reference_separator = False
@@ -372,6 +375,7 @@ class WikipediaTextParser(HTMLParser):
     def _add_break(self) -> None:
         # Inserts a paragraph break without producing duplicate blank lines.
         self._pending_reference_separator = False
+        self._pending_inline_space = False
         self._pending_subscript_separator = False
         if not self._parts:
             return
@@ -425,6 +429,17 @@ class WikipediaTextParser(HTMLParser):
         previous_word = previous_chunk.strip()
         current_word = text.strip()
         if (
+            self._pending_inline_space
+            and not self._math_depth
+            and self._parts
+            and previous_chunk
+            and not previous_chunk.endswith((" ", "\n"))
+            and text
+            and not text.startswith((" ", "\n"))
+        ):
+            self._parts.append(" ")
+            self._pending_inline_space = False
+        if (
             not self._math_depth
             and self._parts
             and text
@@ -435,6 +450,7 @@ class WikipediaTextParser(HTMLParser):
             and len(current_word) >= 2
         ):
             self._parts.append(" ")
+        self._pending_inline_space = False
         self._parts.append(text)
 
     def _append_pending_space(self) -> None:
@@ -867,16 +883,6 @@ def remove_inline_duplicate_latex_symbols(text: str) -> str:
     return re.sub(r"(\$[A-Za-z][A-Za-z0-9_]*\$)\s+([\"”])", r"\1\2", text)
 
 
-def repair_known_inline_word_merges(text: str) -> str:
-    # Repairs known Wikipedia inline-link word merges that arrive as already-joined text.
-    return re.sub(
-        r"\blog-log(?=learning rate schedule\b)",
-        "log-log ",
-        text,
-        flags=re.IGNORECASE,
-    )
-
-
 def clean_latex_context_segment(segment: str) -> str:
     # Keeps prose around LaTeX formulas while dropping duplicated rendered math lines.
     lines: list[str] = []
@@ -983,7 +989,6 @@ def clean_plain_text(
     text = re.sub(r"\n[ \t]+", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
-    text = repair_known_inline_word_merges(text)
     text = format_heading_spacing(text)
     return text.strip()
 

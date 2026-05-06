@@ -85,7 +85,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         # Verifies adjacent inline/link chunks do not merge separate words.
         html = """
         <div class="mw-parser-output">
-          <p><a href="/wiki/Log-log">log-log</a><a href="/wiki/Learning_rate">learning rate schedule</a> is common.</p>
+          <p><a href="/wiki/Log-log">log-log</a> <a href="/wiki/Learning_rate">learning rate schedule</a> is common.</p>
           <p>Token <a href="/wiki/Embedding">embedding</a><span>space</span> stays readable.</p>
           <p><span>H</span><span>ello</span> and <span>e</span><span>mail</span> stay joined.</p>
         </div>
@@ -101,15 +101,15 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("H ello", cleaned)
         self.assertNotIn("e mail", cleaned)
 
-    def test_repairs_known_inline_link_word_merge(self):
-        # Verifies known already-merged inline link text is repaired after parsing.
+    def test_does_not_split_normal_hyphenated_terms(self):
+        # Verifies normal hyphen chains are not changed by cleanup.
         cleaned = clean_plain_text(
-            "with a log-loglearning rate schedule, states that:"
+            "A state-of-the-art model used a fine-tuning schedule and log-loglearning remains literal."
         )
 
         self.assertEqual(
             cleaned,
-            "with a log-log learning rate schedule, states that:",
+            "A state-of-the-art model used a fine-tuning schedule and log-loglearning remains literal.",
         )
 
     def test_preserves_non_math_subscripts_with_underscores(self):

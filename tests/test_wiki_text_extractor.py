@@ -804,6 +804,20 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
                 '" depends on the specific type of LLM.',
                 "If masked, then context surrounds token i",
                 "$i$",
+                "The vector is x_i",
+                "$x_i$",
+                "and the token id is token_i",
+                "$token_i$",
+                "while log",
+                "$log$",
+                "and NLL",
+                "$NLL$",
+                "are short math identifiers.",
+                "But model",
+                "$model$",
+                "and language",
+                "$language$",
+                "stay as prose-plus-math.",
             ]
         )
 
@@ -812,8 +826,15 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Here, $N$ is the number of tokens", cleaned)
         self.assertIn('"context for token $i$" depends', cleaned)
         self.assertIn("context surrounds token $i$", cleaned)
+        self.assertIn("The vector is $x_i$ and the token id is $token_i$", cleaned)
+        self.assertIn("while $log$ and $NLL$ are short math identifiers.", cleaned)
+        self.assertIn("But model $model$ and language $language$", cleaned)
         self.assertNotIn("N $N$", cleaned)
         self.assertNotIn("i $i$", cleaned)
+        self.assertNotIn("x_i $x_i$", cleaned)
+        self.assertNotIn("token_i $token_i$", cleaned)
+        self.assertNotIn("log $log$", cleaned)
+        self.assertNotIn("NLL $NLL$", cleaned)
         self.assertNotIn("\n$i$", cleaned)
 
     def test_math_keep_preserves_raw_displaystyle(self):

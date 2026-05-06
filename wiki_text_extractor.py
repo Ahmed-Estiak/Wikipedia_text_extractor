@@ -32,8 +32,10 @@ MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
 EMPTY_PARENTHESES_PATTERN = re.compile(r"\s*\(\s*\)")
 POWER_HINT_PATTERN = re.compile(r"(?P<value>\b\d+)\s+\(=(?P<compact>\d{2,6})\)")
 LATEX_LINE_PATTERN = re.compile(r"^\s*\$[^$]+\$")
-SIMPLE_LATEX_LINE_PATTERN = re.compile(r"^\s*\$[A-Za-z]\$\s*$")
-INLINE_DUPLICATE_LATEX_SYMBOL_PATTERN = re.compile(r"\b([A-Za-z])\s+\$\1\$")
+SIMPLE_LATEX_LINE_PATTERN = re.compile(r"^\s*\$[A-Za-z][A-Za-z0-9_]*\$\s*$")
+INLINE_DUPLICATE_LATEX_SYMBOL_PATTERN = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_]*)\s+\$\1\$"
+)
 GREEK_LETTER_PATTERN = re.compile(r"[\u0370-\u03ff]")
 RENDERED_MATH_FUNCTION_PATTERN = re.compile(r"\b(?:Pr|log|sin|cos|tan|exp|token)\s*\(")
 LANGUAGE_FOLDER_NAMES = {
@@ -832,8 +834,14 @@ def join_inline_latex_lines(text: str) -> str:
 
 def remove_inline_duplicate_latex_symbols(text: str) -> str:
     # Removes rendered one-letter symbols that duplicate adjacent inline LaTeX.
-    text = INLINE_DUPLICATE_LATEX_SYMBOL_PATTERN.sub(r"$\1$", text)
-    return re.sub(r"(\$[A-Za-z]\$)\s+([\"”])", r"\1\2", text)
+    def replace_duplicate(match: re.Match[str]) -> str:
+        identifier = match.group(1)
+        if len(identifier) == 1 or len(identifier) <= 3 or re.search(r"[\d_]", identifier):
+            return f"${identifier}$"
+        return match.group(0)
+
+    text = INLINE_DUPLICATE_LATEX_SYMBOL_PATTERN.sub(replace_duplicate, text)
+    return re.sub(r"(\$[A-Za-z][A-Za-z0-9_]*\$)\s+([\"”])", r"\1\2", text)
 
 
 def repair_known_inline_word_merges(text: str) -> str:

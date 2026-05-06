@@ -31,6 +31,9 @@ MATH_FRAGMENT_PATTERN = re.compile(r"^[\sA-Za-z0-9+\-–−=∝×*/^().,{}\\]+$"
 MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
 EMPTY_PARENTHESES_PATTERN = re.compile(r"\s*\(\s*\)")
 POWER_HINT_PATTERN = re.compile(r"(?P<value>\b\d+)\s+\(=(?P<compact>\d{2,6})\)")
+LATEX_LINE_PATTERN = re.compile(r"^\s*\$[^$]+\$")
+GREEK_LETTER_PATTERN = re.compile(r"[\u0370-\u03ff]")
+RENDERED_MATH_FUNCTION_PATTERN = re.compile(r"\b(?:Pr|log|sin|cos|tan|exp|token)\s*\(")
 LANGUAGE_FOLDER_NAMES = {
     "bn": "Bangla",
     "en": "English",
@@ -749,7 +752,34 @@ def line_looks_like_rendered_math(line: str) -> bool:
         return True
     if len(stripped) <= 30 and MATH_SYMBOL_PATTERN.search(stripped):
         return True
+    if len(stripped) <= 80 and " " not in stripped and re.search(r"[A-Za-z]\(", stripped):
+        return True
+    math_indicators = 0
+    if any(char in stripped for char in "=∝×÷√∑∫≤≥≈≠−|"):
+        math_indicators += 1
+    if GREEK_LETTER_PATTERN.search(stripped):
+        math_indicators += 1
+    if "\u2061" in stripped or RENDERED_MATH_FUNCTION_PATTERN.search(stripped):
+        math_indicators += 1
+    if math_indicators and len(stripped) <= 180:
+        return True
     return False
+
+
+def remove_rendered_math_before_latex(text: str) -> str:
+    # Drops rendered fallback equation lines that immediately duplicate following LaTeX.
+    lines: list[str] = []
+    for line in text.splitlines():
+        if (
+            LATEX_LINE_PATTERN.match(line)
+            and lines
+            and line_looks_like_rendered_math(lines[-1])
+        ):
+            lines.pop()
+            while lines and not lines[-1].strip():
+                lines.pop()
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def clean_latex_context_segment(segment: str) -> str:
@@ -832,7 +862,10 @@ def clean_math(text: str, math_mode: str) -> str:
         if paragraph_looks_like_math_fragment(paragraph):
             continue
         cleaned.append(paragraph)
-    return "\n\n".join(cleaned)
+    text = "\n\n".join(cleaned)
+    if math_mode == "latex":
+        text = remove_rendered_math_before_latex(text)
+    return text
 
 
 def clean_plain_text(

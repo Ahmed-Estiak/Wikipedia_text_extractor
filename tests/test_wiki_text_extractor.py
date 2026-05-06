@@ -706,6 +706,36 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("\nd\nN", cleaned)
         self.assertNotIn("a constant.", cleaned)
 
+    def test_math_latex_removes_rendered_lines_before_latex(self):
+        # Verifies rendered HTML math fallback lines do not duplicate following LaTeX.
+        text = "\n".join(
+            [
+                "y",
+                "$y$, the post-processed vector f(E(y))",
+                "f(E(y))",
+                "$f(E(y))$",
+                "α=0.34,β=0.28,A=406.4,B=410.7,L0=1.69",
+                "$\\alpha =0.34,\\beta =0.28,A=406.4,B=410.7,L_{0}=1.69$",
+                "y=average Pr(correct token)",
+                "$y={\\mathrm{average }}\\Pr({\\mathrm{correct token}})$",
+                "log\u2061(Perplexity)=−1N∑i=1Nlog\u2061(Pr(tokeni∣context for tokeni))",
+                "$\\log({\\mathrm{Perplexity}})=-{\\frac {1}{N}}\\sum _{i=1}^{N}\\log(\\Pr({\\mathrm{token}}_{i}\\mid {\\mathrm{context for token}}_{i}))$",
+            ]
+        )
+
+        cleaned = clean_plain_text(text, math_mode="latex")
+
+        self.assertIn("$y$, the post-processed vector f(E(y))", cleaned)
+        self.assertIn("$f(E(y))$", cleaned)
+        self.assertIn("$\\alpha =0.34", cleaned)
+        self.assertIn("$y={\\mathrm{average }}", cleaned)
+        self.assertIn("$\\log({\\mathrm{Perplexity}})", cleaned)
+        self.assertNotIn("\ny\n$y$", cleaned)
+        self.assertNotIn("\nf(E(y))\n$f(E(y))$", cleaned)
+        self.assertNotIn("α=0.34,β=0.28", cleaned)
+        self.assertNotIn("y=average Pr(correct token)", cleaned)
+        self.assertNotIn("log\u2061(Perplexity)=−1N", cleaned)
+
     def test_math_keep_preserves_raw_displaystyle(self):
         # Verifies math keep mode leaves raw displaystyle markup untouched.
         text = "{\\displaystyle N\\propto D^{1-q}}"

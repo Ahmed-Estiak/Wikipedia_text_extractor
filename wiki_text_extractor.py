@@ -32,6 +32,8 @@ MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
 EMPTY_PARENTHESES_PATTERN = re.compile(r"\s*\(\s*\)")
 POWER_HINT_PATTERN = re.compile(r"(?P<value>\b\d+)\s+\(=(?P<compact>\d{2,6})\)")
 LATEX_LINE_PATTERN = re.compile(r"^\s*\$[^$]+\$")
+SIMPLE_LATEX_LINE_PATTERN = re.compile(r"^\s*\$[A-Za-z]\$\s*$")
+INLINE_DUPLICATE_LATEX_SYMBOL_PATTERN = re.compile(r"\b([A-Za-z])\s+\$\1\$")
 GREEK_LETTER_PATTERN = re.compile(r"[\u0370-\u03ff]")
 RENDERED_MATH_FUNCTION_PATTERN = re.compile(r"\b(?:Pr|log|sin|cos|tan|exp|token)\s*\(")
 LANGUAGE_FOLDER_NAMES = {
@@ -814,9 +816,34 @@ def join_inline_latex_lines(text: str) -> str:
             joined[-1] = f"{joined[-1].rstrip()} {line.strip()} {lines[index + 1].lstrip()}"
             index += 2
             continue
+        if (
+            SIMPLE_LATEX_LINE_PATTERN.match(line)
+            and joined
+            and joined[-1].strip()
+            and not SECTION_HEADING_PATTERN.match(joined[-1].strip())
+        ):
+            joined[-1] = f"{joined[-1].rstrip()} {line.strip()}"
+            index += 1
+            continue
         joined.append(line)
         index += 1
     return "\n".join(joined)
+
+
+def remove_inline_duplicate_latex_symbols(text: str) -> str:
+    # Removes rendered one-letter symbols that duplicate adjacent inline LaTeX.
+    text = INLINE_DUPLICATE_LATEX_SYMBOL_PATTERN.sub(r"$\1$", text)
+    return re.sub(r"(\$[A-Za-z]\$)\s+([\"”])", r"\1\2", text)
+
+
+def repair_known_inline_word_merges(text: str) -> str:
+    # Repairs known Wikipedia inline-link word merges that arrive as already-joined text.
+    return re.sub(
+        r"\blog-log(?=learning rate schedule\b)",
+        "log-log ",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def clean_latex_context_segment(segment: str) -> str:
@@ -903,6 +930,7 @@ def clean_math(text: str, math_mode: str) -> str:
     if math_mode == "latex":
         text = remove_rendered_math_before_latex(text)
         text = join_inline_latex_lines(text)
+        text = remove_inline_duplicate_latex_symbols(text)
     return text
 
 
@@ -924,6 +952,7 @@ def clean_plain_text(
     text = re.sub(r"\n[ \t]+", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = repair_known_inline_word_merges(text)
     text = format_heading_spacing(text)
     return text.strip()
 

@@ -101,6 +101,17 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("H ello", cleaned)
         self.assertNotIn("e mail", cleaned)
 
+    def test_repairs_known_inline_link_word_merge(self):
+        # Verifies known already-merged inline link text is repaired after parsing.
+        cleaned = clean_plain_text(
+            "with a log-loglearning rate schedule, states that:"
+        )
+
+        self.assertEqual(
+            cleaned,
+            "with a log-log learning rate schedule, states that:",
+        )
+
     def test_preserves_non_math_subscripts_with_underscores(self):
         # Verifies normal HTML subscripts become underscore notation and split following letters.
         html = """
@@ -775,10 +786,35 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(
             cleaned,
             (
-                "Let x $x$ be the number of parameter count, and y $y$ "
+                "Let $x$ be the number of parameter count, and $y$ "
                 "be the performance of the model."
             ),
         )
+
+    def test_math_latex_removes_same_line_rendered_symbol_duplicates(self):
+        # Verifies rendered one-letter symbols beside inline LaTeX are not repeated.
+        text = "\n".join(
+            [
+                'Here, N',
+                "N",
+                "$N$",
+                'is the number of tokens in the text corpus, and "context for token i',
+                "i",
+                "$i$",
+                '" depends on the specific type of LLM.',
+                "If masked, then context surrounds token i",
+                "$i$",
+            ]
+        )
+
+        cleaned = clean_plain_text(text, math_mode="latex")
+
+        self.assertIn("Here, $N$ is the number of tokens", cleaned)
+        self.assertIn('"context for token $i$" depends', cleaned)
+        self.assertIn("context surrounds token $i$", cleaned)
+        self.assertNotIn("N $N$", cleaned)
+        self.assertNotIn("i $i$", cleaned)
+        self.assertNotIn("\n$i$", cleaned)
 
     def test_math_keep_preserves_raw_displaystyle(self):
         # Verifies math keep mode leaves raw displaystyle markup untouched.

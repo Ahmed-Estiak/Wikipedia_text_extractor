@@ -9,6 +9,7 @@ from typing import Iterable
 
 from wiki_text_extractor import (
     PageRequest,
+    add_topic_heading,
     clean_wikipedia_html,
     clean_wikipedia_html_with_references,
     extraction_output_path,
@@ -66,12 +67,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             # Fetches HTML once so both normal clean text and references output use the same source.
             started_at = time.perf_counter()
             html = fetch_page_html(page)
-            text = clean_wikipedia_html(html, args.math)
+            text = add_topic_heading(clean_wikipedia_html(html, args.math), page)
             references_text = clean_wikipedia_html_with_references(
                 html,
                 args.math,
                 include_inline_markers=not args.references_end_only,
             )
+            references_text = add_topic_heading(references_text, page)
             seconds = time.perf_counter() - started_at
         else:
             # Runs the standard HTML extraction path when no references file is requested.

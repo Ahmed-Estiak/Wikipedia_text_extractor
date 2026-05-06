@@ -10,6 +10,7 @@ from wiki_text_extractor import (
     EXTRACTION_METHODS,
     MATH_MODES,
     PageRequest,
+    add_topic_heading,
     clean_wikipedia_html_with_references,
     compare_texts,
     comparison_output_path,
@@ -106,10 +107,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             references_path = references_output_path(args.output, page)
             write_text_file(
                 references_path,
-                clean_wikipedia_html_with_references(
-                    fetch_page_html(page),
-                    "remove",
-                    include_inline_markers=not args.references_end_only,
+                add_topic_heading(
+                    clean_wikipedia_html_with_references(
+                        fetch_page_html(page),
+                        "remove",
+                        include_inline_markers=not args.references_end_only,
+                    ),
+                    page,
                 ),
             )
             print(f"Saved HTML references text: {references_path}")

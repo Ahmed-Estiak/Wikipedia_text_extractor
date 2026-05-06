@@ -1225,6 +1225,22 @@ def remove_empty_note_section(text: str) -> str:
     ).strip()
 
 
+def topic_heading(page: PageRequest) -> str:
+    # Formats the page title like the rest of the cleaned section headings.
+    return f"== {page.title} =="
+
+
+def add_topic_heading(text: str, page: PageRequest) -> str:
+    # Prefixes generated clean extraction output with the requested topic title.
+    heading = topic_heading(page)
+    text = text.strip()
+    if not text:
+        return heading
+    if text.casefold().startswith(heading.casefold()):
+        return text
+    return f"{heading}\n\n{text}"
+
+
 def extract_text_from_extracts_api(page: PageRequest, math_mode: str = "remove") -> str:
     # Fetches and cleans text from the extracts API, then drops empty Notes.
     text = clean_plain_text(fetch_page_extract(page), math_mode)
@@ -1240,9 +1256,9 @@ def extract_text_from_html(page: PageRequest, math_mode: str = "remove") -> str:
 def extract_text(page: PageRequest, method: str = "extracts", math_mode: str = "remove") -> str:
     # Dispatches to the selected extraction method with the requested math policy.
     if method == "extracts":
-        return extract_text_from_extracts_api(page, math_mode)
+        return add_topic_heading(extract_text_from_extracts_api(page, math_mode), page)
     if method == "html":
-        return extract_text_from_html(page, math_mode)
+        return add_topic_heading(extract_text_from_html(page, math_mode), page)
     raise ValueError(f"Unsupported extraction method: {method}")
 
 

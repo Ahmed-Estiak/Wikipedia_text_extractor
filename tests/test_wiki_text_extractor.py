@@ -2,6 +2,8 @@ from pathlib import Path
 import unittest
 
 from wiki_text_extractor import (
+    PageRequest,
+    add_topic_heading,
     clean_plain_text,
     clean_wikipedia_html_with_references,
     clean_wikipedia_html,
@@ -539,6 +541,15 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         path = output_path_for_method("output/saturn.txt", "html", split_methods=True)
 
         self.assertEqual(path, Path("output/saturn_html.txt"))
+
+    def test_add_topic_heading_prefixes_clean_outputs_once(self):
+        # Verifies generated clean text starts with the page title as a section heading.
+        page = PageRequest("Large language model", "en")
+
+        headed = add_topic_heading("Article body.", page)
+
+        self.assertEqual(headed, "== Large language model ==\n\nArticle body.")
+        self.assertEqual(add_topic_heading(headed, page), headed)
 
     def test_nested_output_paths_include_topic_and_language(self):
         # Verifies generated output paths are grouped by topic and language folders.

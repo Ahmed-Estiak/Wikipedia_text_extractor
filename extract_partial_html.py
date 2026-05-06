@@ -11,6 +11,7 @@ from typing import Iterable
 from wiki_text_extractor import (
     PageRequest,
     PartialExtractionError,
+    add_topic_heading,
     clean_wikipedia_html,
     extract_partial_text,
     fetch_page_html,
@@ -114,7 +115,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 f"Math mode: {args.math}",
             ]
         )
-        write_text_file(output_path, result.text)
+        write_text_file(output_path, add_topic_heading(result.text, page))
         write_text_file(report_path, report_text)
     except PartialExtractionError as exc:
         write_text_file(report_path, exc.report_text)

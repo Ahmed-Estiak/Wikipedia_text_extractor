@@ -11,6 +11,7 @@ from wiki_text_extractor import (
     extraction_output_path,
     page_request_from_url,
     run_extraction,
+    runtime_label,
     runtime_output_path,
     update_runtime_report,
     write_text_file,
@@ -57,7 +58,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         update_runtime_report(
             runtime_path,
             page,
-            {f"Extracts API runtime ({args.math})": seconds},
+            {runtime_label("Extracts API runtime", args.math, page): seconds},
         )
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -21,6 +21,7 @@ from wiki_text_extractor import (
     raw_output_path,
     references_output_path,
     run_extraction,
+    runtime_label,
     runtime_output_path,
     update_runtime_report,
     write_text_file,
@@ -135,9 +136,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     for math_mode in math_modes:
         extracts_seconds = results[("extracts", math_mode)][1]
         html_seconds = results[("html", math_mode)][1]
-        runtime_updates[f"Extracts API runtime ({math_mode})"] = extracts_seconds
-        runtime_updates[f"HTML parser runtime ({math_mode})"] = html_seconds
-        runtime_updates[f"Runtime mismatch ({math_mode})"] = abs(
+        runtime_updates[
+            runtime_label("Extracts API runtime", math_mode, page)
+        ] = extracts_seconds
+        runtime_updates[
+            runtime_label("HTML parser runtime", math_mode, page)
+        ] = html_seconds
+        runtime_updates[runtime_label("Runtime mismatch", math_mode, page)] = abs(
             extracts_seconds - html_seconds
         )
     runtime_path = runtime_output_path(args.output, page)

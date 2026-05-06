@@ -17,6 +17,7 @@ from wiki_text_extractor import (
     extract_partial_text,
     PartialExtractionError,
     required_partial_anchor_score,
+    runtime_label,
     strong_anchor_candidates,
     runtime_output_path,
     update_runtime_report,
@@ -561,28 +562,40 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
                 path,
                 page,
                 {
-                    "Extracts API runtime (remove)": 1.0,
-                    "HTML parser runtime (remove)": 2.0,
+                    runtime_label("Extracts API runtime", "remove", page): 1.0,
+                    runtime_label("HTML parser runtime", "remove", page): 2.0,
                 },
             )
             update_runtime_report(
                 path,
                 page,
-                {"Partial HTML runtime (latex)": 3.0},
+                {runtime_label("Partial HTML runtime", "latex", page): 3.0},
             )
             update_runtime_report(
                 path,
                 page,
-                {"HTML parser runtime (remove)": 4.0},
+                {runtime_label("HTML parser runtime", "remove", page): 4.0},
             )
 
             text = path.read_text(encoding="utf-8")
 
-            self.assertIn("Topic: Large language model", text)
-            self.assertIn("Extracts API runtime (remove): 1.000 seconds", text)
-            self.assertIn("HTML parser runtime (remove): 4.000 seconds", text)
-            self.assertIn("Partial HTML runtime (latex): 3.000 seconds", text)
-            self.assertNotIn("HTML parser runtime (remove): 2.000 seconds", text)
+            self.assertNotIn("Topic:", text)
+            self.assertIn(
+                "Extracts API runtime (remove, Large language model): 1.000 seconds",
+                text,
+            )
+            self.assertIn(
+                "HTML parser runtime (remove, Large language model): 4.000 seconds",
+                text,
+            )
+            self.assertIn(
+                "Partial HTML runtime (latex, Large language model): 3.000 seconds",
+                text,
+            )
+            self.assertNotIn(
+                "HTML parser runtime (remove, Large language model): 2.000 seconds",
+                text,
+            )
         finally:
             path.unlink(missing_ok=True)
 

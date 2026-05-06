@@ -1360,6 +1360,11 @@ def runtime_label_order(label: str) -> tuple[int, str]:
     return 9, label
 
 
+def runtime_label(base_label: str, math_mode: str, page: PageRequest) -> str:
+    # Stores the topic beside each timing so mixed-topic runtime files stay unambiguous.
+    return f"{base_label} ({math_mode}, {page.title})"
+
+
 def update_runtime_report(path: Path, page: PageRequest, updates: dict[str, float]) -> None:
     # Updates only the runtime entries from the current command and preserves the rest.
     entries: dict[str, str] = {}
@@ -1373,7 +1378,7 @@ def update_runtime_report(path: Path, page: PageRequest, updates: dict[str, floa
     for label, seconds in updates.items():
         entries[label] = f"{seconds:.3f} seconds"
 
-    lines = ["Wikipedia Text Extraction Runtime", "", f"Topic: {page.title}"]
+    lines = ["Wikipedia Text Extraction Runtime"]
     if entries:
         lines.append("")
         for label in sorted(entries, key=runtime_label_order):

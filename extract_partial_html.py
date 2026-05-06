@@ -19,6 +19,7 @@ from wiki_text_extractor import (
     page_request_from_url,
     partial_match_report_path,
     partial_output_path,
+    runtime_label,
     runtime_output_path,
     update_runtime_report,
     write_text_file,
@@ -123,7 +124,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         update_runtime_report(
             runtime_path,
             page,
-            {f"Partial HTML runtime ({args.math})": seconds},
+            {runtime_label("Partial HTML runtime", args.math, page): seconds},
         )
     except PartialExtractionError as exc:
         write_text_file(report_path, exc.report_text)

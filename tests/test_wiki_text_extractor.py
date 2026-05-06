@@ -736,6 +736,30 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("y=average Pr(correct token)", cleaned)
         self.assertNotIn("log\u2061(Perplexity)=−1N", cleaned)
 
+    def test_math_latex_rejoins_inline_symbols_with_prose(self):
+        # Verifies inline math symbols do not force awkward line breaks in prose.
+        text = "\n".join(
+            [
+                "Let x",
+                "x",
+                "$x$",
+                "be the number of parameter count, and y",
+                "y",
+                "$y$",
+                "be the performance of the model.",
+            ]
+        )
+
+        cleaned = clean_plain_text(text, math_mode="latex")
+
+        self.assertEqual(
+            cleaned,
+            (
+                "Let x $x$ be the number of parameter count, and y $y$ "
+                "be the performance of the model."
+            ),
+        )
+
     def test_math_keep_preserves_raw_displaystyle(self):
         # Verifies math keep mode leaves raw displaystyle markup untouched.
         text = "{\\displaystyle N\\propto D^{1-q}}"

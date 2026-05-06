@@ -782,6 +782,29 @@ def remove_rendered_math_before_latex(text: str) -> str:
     return "\n".join(lines)
 
 
+def join_inline_latex_lines(text: str) -> str:
+    # Rejoins short inline LaTeX lines that HTML math extraction split from prose.
+    lines = text.splitlines()
+    joined: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if (
+            LATEX_LINE_PATTERN.match(line)
+            and joined
+            and joined[-1].strip()
+            and index + 1 < len(lines)
+            and lines[index + 1].strip()
+            and not SECTION_HEADING_PATTERN.match(lines[index + 1].strip())
+        ):
+            joined[-1] = f"{joined[-1].rstrip()} {line.strip()} {lines[index + 1].lstrip()}"
+            index += 2
+            continue
+        joined.append(line)
+        index += 1
+    return "\n".join(joined)
+
+
 def clean_latex_context_segment(segment: str) -> str:
     # Keeps prose around LaTeX formulas while dropping duplicated rendered math lines.
     lines: list[str] = []
@@ -865,6 +888,7 @@ def clean_math(text: str, math_mode: str) -> str:
     text = "\n\n".join(cleaned)
     if math_mode == "latex":
         text = remove_rendered_math_before_latex(text)
+        text = join_inline_latex_lines(text)
     return text
 
 

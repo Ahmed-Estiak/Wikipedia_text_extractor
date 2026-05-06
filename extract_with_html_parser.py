@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also save an HTML-only text file with citation numbers and References",
     )
+    parser.add_argument(
+        "--references-end-only",
+        action="store_true",
+        help="When saving references, omit inline citation markers and keep numbered sources only at the end",
+    )
     return parser
 
 
@@ -62,7 +67,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             started_at = time.perf_counter()
             html = fetch_page_html(page)
             text = clean_wikipedia_html(html, args.math)
-            references_text = clean_wikipedia_html_with_references(html, args.math)
+            references_text = clean_wikipedia_html_with_references(
+                html,
+                args.math,
+                include_inline_markers=not args.references_end_only,
+            )
             seconds = time.perf_counter() - started_at
         else:
             # Runs the standard HTML extraction path when no references file is requested.

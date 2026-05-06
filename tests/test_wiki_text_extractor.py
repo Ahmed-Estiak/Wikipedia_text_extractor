@@ -372,6 +372,27 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("2. Second source.", text)
         self.assertNotIn("3. A note, not a numeric reference.", text)
 
+    def test_html_references_export_can_keep_sources_only_at_end(self):
+        # Verifies references export can omit inline markers while keeping the final source list.
+        html = """
+        <div class="mw-parser-output">
+          <p>Article text.<sup class="reference"><a><span>[</span>1<span>]</span></a></sup> More text.</p>
+          <div class="mw-heading mw-heading2"><h2 id="References">References</h2></div>
+          <ol class="references">
+            <li><span class="mw-cite-backlink">^</span>
+              <span class="reference-text">First source.</span></li>
+          </ol>
+        </div>
+        """
+
+        text = clean_wikipedia_html_with_references(
+            html, include_inline_markers=False
+        )
+
+        self.assertIn("Article text. More text.", text)
+        self.assertNotIn("Article text.[1]", text)
+        self.assertIn("== References ==\n\n1. First source.", text)
+
     def test_partial_extraction_matches_exact_clean_section(self):
         # Verifies pasted text can extract the same section from already-clean HTML output.
         full_text = (

@@ -871,15 +871,18 @@ def extract_references_from_html(html: str) -> str:
 
 
 def clean_wikipedia_html_with_references(
-    html: str, math_mode: str = "remove"
+    html: str, math_mode: str = "remove", include_inline_markers: bool = True
 ) -> str:
-    # Builds an HTML-derived article copy with inline citation markers plus References.
-    parser = WikipediaTextParser(include_reference_markers=True)
-    parser.feed(html)
-    parser.close()
-    body = clean_plain_text(
-        parser.get_text(), math_mode, remove_inline_references=False
-    )
+    # Builds an HTML-derived article copy with appended References.
+    if include_inline_markers:
+        parser = WikipediaTextParser(include_reference_markers=True)
+        parser.feed(html)
+        parser.close()
+        body = clean_plain_text(
+            parser.get_text(), math_mode, remove_inline_references=False
+        )
+    else:
+        body = clean_wikipedia_html(html, math_mode)
     references = extract_references_from_html(html)
     return "\n\n".join(part for part in (body, references) if part).strip()
 

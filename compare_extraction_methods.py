@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Save an HTML-only text file with citation numbers and References",
     )
+    parser.add_argument(
+        "--references-end-only",
+        action="store_true",
+        help="When saving references, omit inline citation markers and keep numbered sources only at the end",
+    )
     return parser
 
 
@@ -101,7 +106,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             references_path = references_output_path(args.output, page)
             write_text_file(
                 references_path,
-                clean_wikipedia_html_with_references(fetch_page_html(page), "remove"),
+                clean_wikipedia_html_with_references(
+                    fetch_page_html(page),
+                    "remove",
+                    include_inline_markers=not args.references_end_only,
+                ),
             )
             print(f"Saved HTML references text: {references_path}")
         except RuntimeError as exc:

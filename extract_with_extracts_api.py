@@ -12,6 +12,7 @@ from wiki_text_extractor import (
     page_request_from_url,
     run_extraction,
     runtime_output_path,
+    update_runtime_report,
     write_text_file,
 )
 
@@ -53,16 +54,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         runtime_path = runtime_output_path(args.output, page)
         write_text_file(output_path, text)
         # Updates the shared runtime file with the latest extracts-only run.
-        write_text_file(
+        update_runtime_report(
             runtime_path,
-            "\n".join(
-                [
-                    "Wikipedia Text Extraction Runtime",
-                    "",
-                    f"Latest run: extracts API / math {args.math}",
-                    f"Extracts API runtime ({args.math}): {seconds:.3f} seconds",
-                ]
-            ),
+            page,
+            {f"Extracts API runtime ({args.math})": seconds},
         )
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

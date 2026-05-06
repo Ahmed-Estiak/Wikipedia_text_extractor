@@ -22,6 +22,7 @@ from wiki_text_extractor import (
     references_output_path,
     run_extraction,
     runtime_output_path,
+    update_runtime_report,
     write_text_file,
 )
 
@@ -129,23 +130,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         write_text_file(comparison_path, compare_texts(extracts_remove, html_remove))
         print(f"Saved remove-mode comparison report: {comparison_path}")
 
-    # Builds a runtime report for each requested math mode and both extraction methods.
-    runtime_lines = ["Wikipedia Text Extraction Runtime", "", f"Math mode request: {args.math}"]
+    # Updates timing entries for each requested math mode and both extraction methods.
+    runtime_updates: dict[str, float] = {}
     for math_mode in math_modes:
         extracts_seconds = results[("extracts", math_mode)][1]
         html_seconds = results[("html", math_mode)][1]
-        runtime_lines.extend(
-            [
-                "",
-                f"Math mode: {math_mode}",
-                f"Extracts API runtime: {extracts_seconds:.3f} seconds",
-                f"HTML parser runtime: {html_seconds:.3f} seconds",
-                f"Runtime mismatch: {abs(extracts_seconds - html_seconds):.3f} seconds",
-            ]
+        runtime_updates[f"Extracts API runtime ({math_mode})"] = extracts_seconds
+        runtime_updates[f"HTML parser runtime ({math_mode})"] = html_seconds
+        runtime_updates[f"Runtime mismatch ({math_mode})"] = abs(
+            extracts_seconds - html_seconds
         )
-    runtime_report = "\n".join(runtime_lines)
     runtime_path = runtime_output_path(args.output, page)
-    write_text_file(runtime_path, runtime_report)
+    update_runtime_report(runtime_path, page, runtime_updates)
 
     print(f"Saved runtime report: {runtime_path}")
     return 0

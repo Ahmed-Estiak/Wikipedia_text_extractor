@@ -19,6 +19,8 @@ from wiki_text_extractor import (
     page_request_from_url,
     partial_match_report_path,
     partial_output_path,
+    runtime_output_path,
+    update_runtime_report,
     write_text_file,
 )
 
@@ -92,6 +94,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     input_path = Path(args.input)
     output_path = partial_output_path(args.output, page)
     report_path = partial_match_report_path(args.output, page)
+    runtime_path = runtime_output_path(args.output, page)
 
     try:
         pasted_text = read_pasted_text(input_path)
@@ -117,6 +120,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         write_text_file(output_path, add_topic_heading(result.text, page))
         write_text_file(report_path, report_text)
+        update_runtime_report(
+            runtime_path,
+            page,
+            {f"Partial HTML runtime ({args.math})": seconds},
+        )
     except PartialExtractionError as exc:
         write_text_file(report_path, exc.report_text)
         print(f"Error: {exc}", file=sys.stderr)
@@ -128,6 +136,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     print(f"Saved partial text: {output_path}")
     print(f"Updated match report: {report_path}")
+    print(f"Updated runtime report: {runtime_path}")
     return 0
 
 

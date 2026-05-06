@@ -18,6 +18,7 @@ from wiki_text_extractor import (
     references_output_path,
     run_extraction,
     runtime_output_path,
+    update_runtime_report,
     write_text_file,
 )
 
@@ -88,16 +89,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             references_path = references_output_path(args.output, page)
             write_text_file(references_path, references_text)
         # Updates the shared runtime file with the latest HTML-only run.
-        write_text_file(
+        update_runtime_report(
             runtime_path,
-            "\n".join(
-                [
-                    "Wikipedia Text Extraction Runtime",
-                    "",
-                    f"Latest run: HTML parser / math {args.math}",
-                    f"HTML parser runtime ({args.math}): {seconds:.3f} seconds",
-                ]
-            ),
+            page,
+            {f"HTML parser runtime ({args.math})": seconds},
         )
     except (RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

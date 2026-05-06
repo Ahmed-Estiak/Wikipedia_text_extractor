@@ -19,6 +19,7 @@ from wiki_text_extractor import (
     required_partial_anchor_score,
     strong_anchor_candidates,
     runtime_output_path,
+    update_runtime_report,
     references_output_path,
     extract_note_section,
     note_section_has_body,
@@ -550,6 +551,40 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(headed, "== Large language model ==\n\nArticle body.")
         self.assertEqual(add_topic_heading(headed, page), headed)
+
+    def test_update_runtime_report_preserves_unrelated_entries(self):
+        # Verifies single runs only replace their own timing and keep other runtime entries.
+        page = PageRequest("Large language model", "en")
+        path = Path("test_runtime_report.txt")
+        try:
+            update_runtime_report(
+                path,
+                page,
+                {
+                    "Extracts API runtime (remove)": 1.0,
+                    "HTML parser runtime (remove)": 2.0,
+                },
+            )
+            update_runtime_report(
+                path,
+                page,
+                {"Partial HTML runtime (latex)": 3.0},
+            )
+            update_runtime_report(
+                path,
+                page,
+                {"HTML parser runtime (remove)": 4.0},
+            )
+
+            text = path.read_text(encoding="utf-8")
+
+            self.assertIn("Topic: Large language model", text)
+            self.assertIn("Extracts API runtime (remove): 1.000 seconds", text)
+            self.assertIn("HTML parser runtime (remove): 4.000 seconds", text)
+            self.assertIn("Partial HTML runtime (latex): 3.000 seconds", text)
+            self.assertNotIn("HTML parser runtime (remove): 2.000 seconds", text)
+        finally:
+            path.unlink(missing_ok=True)
 
     def test_nested_output_paths_include_topic_and_language(self):
         # Verifies generated output paths are grouped by topic and language folders.

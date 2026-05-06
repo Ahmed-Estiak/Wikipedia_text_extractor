@@ -1347,6 +1347,40 @@ def write_text_file(path: Path, text: str) -> None:
     path.write_text(text + "\n", encoding="utf-8")
 
 
+def runtime_label_order(label: str) -> tuple[int, str]:
+    # Keeps runtime reports stable while allowing old entries to survive single runs.
+    if label.startswith("Extracts API runtime"):
+        return 0, label
+    if label.startswith("HTML parser runtime"):
+        return 1, label
+    if label.startswith("Runtime mismatch"):
+        return 2, label
+    if label.startswith("Partial HTML runtime"):
+        return 3, label
+    return 9, label
+
+
+def update_runtime_report(path: Path, page: PageRequest, updates: dict[str, float]) -> None:
+    # Updates only the runtime entries from the current command and preserves the rest.
+    entries: dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if ": " not in line or not line.endswith(" seconds"):
+                continue
+            label, value = line.split(": ", 1)
+            entries[label] = value
+
+    for label, seconds in updates.items():
+        entries[label] = f"{seconds:.3f} seconds"
+
+    lines = ["Wikipedia Text Extraction Runtime", "", f"Topic: {page.title}"]
+    if entries:
+        lines.append("")
+        for label in sorted(entries, key=runtime_label_order):
+            lines.append(f"{label}: {entries[label]}")
+    write_text_file(path, "\n".join(lines))
+
+
 def run_extraction(
     page: PageRequest, method: str, math_mode: str = "remove"
 ) -> tuple[str, float]:

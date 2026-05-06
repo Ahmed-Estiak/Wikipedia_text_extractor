@@ -15,6 +15,7 @@ from wiki_text_extractor import (
     extract_partial_text,
     PartialExtractionError,
     required_partial_anchor_score,
+    strong_anchor_candidates,
     runtime_output_path,
     references_output_path,
     extract_note_section,
@@ -468,6 +469,23 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             0.92,
         )
         self.assertEqual(required_partial_anchor_score("Done here.", 0.97), 0.97)
+
+    def test_partial_anchor_candidates_prefer_prose_over_math_edges(self):
+        # Verifies weird copied math at pasted edges is not preferred over nearby prose.
+        pasted = (
+            "N∝D1−q+a constant\n\n"
+            "The size distribution is commonly described with a power law.\n\n"
+            "This prose line should close the selected section.\n\n"
+            "dN/dD ∝ D^-q"
+        )
+
+        start_anchor = strong_anchor_candidates(pasted, "start", anchor_size=120)[0]
+        end_anchor = strong_anchor_candidates(pasted, "end", anchor_size=120)[0]
+
+        self.assertIn("The size distribution", start_anchor)
+        self.assertIn("This prose line", end_anchor)
+        self.assertNotIn("N∝D", start_anchor)
+        self.assertNotIn("dN/dD", end_anchor)
 
     def test_partial_extraction_reports_threshold_failure(self):
         # Verifies unreliable pasted text fails with a debuggable report instead of bad output.

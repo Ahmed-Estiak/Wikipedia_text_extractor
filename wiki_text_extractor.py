@@ -929,11 +929,31 @@ def line_looks_like_partial_noise(line: str) -> bool:
     return False
 
 
+def line_looks_like_math_heavy(line: str) -> bool:
+    # Detects equation-heavy copied lines so prose can be preferred for fuzzy anchors.
+    stripped = line.strip()
+    if not stripped:
+        return False
+    math_symbols = sum(1 for char in stripped if char in "+-=*/^_{}\\∝×÷√∑∫≤≥≈≠−")
+    letters = sum(1 for char in stripped if char.isalpha())
+    visible = sum(1 for char in stripped if not char.isspace())
+    if visible == 0:
+        return False
+    if math_symbols >= 2 and math_symbols / visible >= 0.12:
+        return True
+    if visible >= 3 and letters / visible < 0.35 and math_symbols >= 1:
+        return True
+    if re.search(r"\b[a-zA-Z]\s*[=∝]\s*[A-Za-z0-9]", stripped):
+        return True
+    return False
+
+
 def meaningful_partial_units(text: str) -> list[str]:
     # Keeps paragraph-like pasted chunks that are useful as fuzzy anchors.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     paragraphs = re.split(r"\n\s*\n+", text)
-    units: list[str] = []
+    prose_units: list[str] = []
+    math_units: list[str] = []
     for paragraph in paragraphs:
         lines = [
             line.strip()
@@ -942,11 +962,17 @@ def meaningful_partial_units(text: str) -> list[str]:
         ]
         if not lines:
             continue
-        unit = " ".join(lines)
+        prose_lines = [line for line in lines if not line_looks_like_math_heavy(line)]
+        unit = " ".join(prose_lines or lines)
         if len(normalize_for_match(unit)) >= 8:
-            units.append(unit)
-    if units:
-        return units
+            if prose_lines:
+                prose_units.append(unit)
+            else:
+                math_units.append(unit)
+    if prose_units:
+        return prose_units
+    if math_units:
+        return math_units
 
     fallback = " ".join(line.strip() for line in text.splitlines() if line.strip())
     return [fallback] if fallback else []

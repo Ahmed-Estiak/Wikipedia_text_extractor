@@ -437,6 +437,26 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("Intro text.", result.text)
         self.assertNotIn("Footer text.", result.text)
 
+    def test_partial_extraction_can_use_short_valid_lines(self):
+        # Verifies short meaningful lines are not discarded as copied-edge noise.
+        full_text = (
+            "Before text.\n\n"
+            "Valid short sentence.\n\n"
+            "The section body has enough surrounding detail to identify the partial range.\n\n"
+            "Done here.\n\n"
+            "After text."
+        )
+        pasted = (
+            "Valid short sentence.\n\n"
+            "The section body has enough surrounding detail to identify the partial range.\n\n"
+            "Done here."
+        )
+
+        result = extract_partial_text(full_text, pasted, threshold=0.92, anchor_size=120)
+
+        self.assertTrue(result.text.startswith("Valid short sentence."))
+        self.assertTrue(result.text.endswith("Done here."))
+
     def test_partial_extraction_reports_threshold_failure(self):
         # Verifies unreliable pasted text fails with a debuggable report instead of bad output.
         with self.assertRaises(PartialExtractionError) as context:
@@ -448,6 +468,14 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertIn("failed", context.exception.report_text)
         self.assertIn("Threshold: 0.990", context.exception.report_text)
+
+    def test_partial_html_cli_defaults_to_latex_math(self):
+        # Verifies partial extraction keeps LaTeX math by default unless the CLI overrides it.
+        from extract_partial_html import build_parser
+
+        args = build_parser().parse_args(["--url", "https://en.wikipedia.org/wiki/Kuiper_belt"])
+
+        self.assertEqual(args.math, "latex")
 
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.

@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--math",
         choices=("remove", "latex", "keep"),
-        default="remove",
+        default="latex",
         help="How math equations should be handled before partial matching",
     )
     parser.add_argument(

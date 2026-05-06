@@ -917,14 +917,14 @@ def line_looks_like_partial_noise(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return True
-    if len(stripped) < 40:
-        return True
     letters = sum(1 for char in stripped if char.isalpha())
     visible = sum(1 for char in stripped if not char.isspace())
     if visible and letters / visible < 0.30:
         return True
     lower = stripped.casefold()
     if lower in {"edit", "source", "map", "image"}:
+        return True
+    if len(stripped) < 40 and re.fullmatch(r"[\W\d_]+", stripped):
         return True
     return False
 
@@ -943,7 +943,7 @@ def meaningful_partial_units(text: str) -> list[str]:
         if not lines:
             continue
         unit = " ".join(lines)
-        if len(normalize_for_match(unit)) >= 45:
+        if len(normalize_for_match(unit)) >= 8:
             units.append(unit)
     if units:
         return units

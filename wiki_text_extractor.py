@@ -399,13 +399,18 @@ class WikipediaTextParser(HTMLParser):
         if self._heading_buffer is not None:
             self._heading_buffer.append(text)
             return
+        previous_chunk = self._parts[-1] if self._parts else ""
+        previous_word = previous_chunk.strip()
+        current_word = text.strip()
         if (
             not self._math_depth
             and self._parts
             and text
-            and self._parts[-1]
-            and self._parts[-1][-1].isalnum()
+            and previous_chunk
+            and previous_chunk[-1].isalnum()
             and text[0].isalnum()
+            and len(previous_word) >= 2
+            and len(current_word) >= 2
         ):
             self._parts.append(" ")
         self._parts.append(text)

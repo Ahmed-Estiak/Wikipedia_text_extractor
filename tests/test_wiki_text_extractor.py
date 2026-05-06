@@ -14,6 +14,7 @@ from wiki_text_extractor import (
     partial_output_path,
     extract_partial_text,
     PartialExtractionError,
+    required_partial_anchor_score,
     runtime_output_path,
     references_output_path,
     extract_note_section,
@@ -456,6 +457,17 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertTrue(result.text.startswith("Valid short sentence."))
         self.assertTrue(result.text.endswith("Done here."))
+
+    def test_short_partial_anchors_require_stricter_scores(self):
+        # Verifies very short anchors use a higher score floor to avoid weak fuzzy matches.
+        self.assertEqual(required_partial_anchor_score("Done here.", 0.92), 0.95)
+        self.assertEqual(
+            required_partial_anchor_score(
+                "This is a longer and more distinctive anchor.", 0.92
+            ),
+            0.92,
+        )
+        self.assertEqual(required_partial_anchor_score("Done here.", 0.97), 0.97)
 
     def test_partial_extraction_reports_threshold_failure(self):
         # Verifies unreliable pasted text fails with a debuggable report instead of bad output.

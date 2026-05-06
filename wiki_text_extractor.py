@@ -986,6 +986,13 @@ def fuzzy_ratio(left: str, right: str) -> float:
     return difflib.SequenceMatcher(None, left, right).ratio()
 
 
+def required_partial_anchor_score(anchor: str, threshold: float) -> float:
+    # Requires stricter matches for very short anchors because they are less unique.
+    if len(normalize_for_match(anchor)) < 14:
+        return max(threshold, 0.95)
+    return threshold
+
+
 def original_span_from_normalized(
     index_map: list[int], normalized_start: int, normalized_end: int
 ) -> tuple[int, int]:
@@ -1118,7 +1125,14 @@ def extract_partial_text(
         for end_index, end_match in end_matches:
             if start_match.start > end_match.end:
                 continue
-            if start_match.score < threshold or end_match.score < threshold:
+            start_required_score = required_partial_anchor_score(
+                start_match.anchor, threshold
+            )
+            end_required_score = required_partial_anchor_score(end_match.anchor, threshold)
+            if (
+                start_match.score < start_required_score
+                or end_match.score < end_required_score
+            ):
                 continue
             average_score = (start_match.score + end_match.score) / 2
             extracted_length = end_match.end - start_match.start

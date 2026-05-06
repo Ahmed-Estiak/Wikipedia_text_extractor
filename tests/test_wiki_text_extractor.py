@@ -81,6 +81,22 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             ),
         )
 
+    def test_preserves_space_between_adjacent_inline_link_text(self):
+        # Verifies adjacent inline/link chunks do not merge separate words.
+        html = """
+        <div class="mw-parser-output">
+          <p><a href="/wiki/Log-log">log-log</a><a href="/wiki/Learning_rate">learning rate schedule</a> is common.</p>
+          <p>Token <a href="/wiki/Embedding">embedding</a><span>space</span> stays readable.</p>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html)
+
+        self.assertIn("log-log learning rate schedule is common.", cleaned)
+        self.assertIn("Token embedding space stays readable.", cleaned)
+        self.assertNotIn("log-loglearning", cleaned)
+        self.assertNotIn("embeddingspace", cleaned)
+
     def test_preserves_non_math_subscripts_with_underscores(self):
         # Verifies normal HTML subscripts become underscore notation and split following letters.
         html = """

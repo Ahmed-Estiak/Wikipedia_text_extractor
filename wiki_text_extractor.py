@@ -399,6 +399,15 @@ class WikipediaTextParser(HTMLParser):
         if self._heading_buffer is not None:
             self._heading_buffer.append(text)
             return
+        if (
+            not self._math_depth
+            and self._parts
+            and text
+            and self._parts[-1]
+            and self._parts[-1][-1].isalnum()
+            and text[0].isalnum()
+        ):
+            self._parts.append(" ")
         self._parts.append(text)
 
     def _append_pending_space(self) -> None:

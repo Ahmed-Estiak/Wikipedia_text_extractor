@@ -205,6 +205,8 @@ class WikipediaTextParser(HTMLParser):
                 start = attr_map.get("start", "1")
                 start_index = int(start) - 1 if start.isdigit() else 0
                 self._list_stack.append({"style": "decimal", "index": start_index})
+        elif tag == "ul":
+            self._list_stack.append({"style": "bullet", "index": 0})
 
         if tag == "li" and self._list_stack and self._skip_section_level is None:
             current_list = self._list_stack[-1]
@@ -216,6 +218,9 @@ class WikipediaTextParser(HTMLParser):
                 else:
                     label = str(current_list["index"])
                 self._pending_prefix = f"{label}. "
+            elif current_list["style"] == "bullet":
+                self._add_break()
+                self._pending_prefix = "- "
 
         if tag == "sup":
             if classes.intersection(self.SKIP_CLASSES) or "reference" in classes:
@@ -277,7 +282,7 @@ class WikipediaTextParser(HTMLParser):
             self._close_math_tag(tag)
             return
 
-        if tag == "ol" and self._list_stack:
+        if tag in {"ol", "ul"} and self._list_stack:
             self._list_stack.pop()
 
         if re.fullmatch(r"h[1-6]", tag):

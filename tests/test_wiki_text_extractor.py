@@ -330,6 +330,30 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("4. Haumea", cleaned)
         self.assertIn("5. Makemake", cleaned)
 
+    def test_html_parser_generates_hyphen_bullet_list_labels(self):
+        # Verifies unordered HTML lists keep visible bullet structure as hyphen labels.
+        html = """
+        <div class="mw-parser-output">
+          <p>Examples include:</p>
+          <ul>
+            <li>reported arithmetics</li>
+            <li>decoding the International Phonetic Alphabet</li>
+            <li>unscrambling a word's letters</li>
+            <li>disambiguating word-in-context datasets<sup class="reference">[79]</sup></li>
+            <li>converting spatial words</li>
+          </ul>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html)
+
+        self.assertIn("Examples include:\n\n- reported arithmetics", cleaned)
+        self.assertIn("- decoding the International Phonetic Alphabet", cleaned)
+        self.assertIn("- unscrambling a word's letters", cleaned)
+        self.assertIn("- disambiguating word-in-context datasets", cleaned)
+        self.assertIn("- converting spatial words", cleaned)
+        self.assertNotIn("[79]", cleaned)
+
     def test_html_parser_generates_lower_alpha_note_labels(self):
         # Verifies lower-alpha note references keep a./b. labels and drop backlink markers.
         html = """

@@ -584,6 +584,14 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         # Verifies very short anchors use a higher score floor to avoid weak fuzzy matches.
         self.assertEqual(required_partial_anchor_score("Done here.", 0.92), 0.95)
         self.assertEqual(
+            required_partial_anchor_score("E {\\displaystyle E}.", 0.92),
+            0.95,
+        )
+        self.assertEqual(
+            required_partial_anchor_score("states that: C C N D L A N", 0.92),
+            0.87,
+        )
+        self.assertEqual(
             required_partial_anchor_score(
                 "This is a longer and more distinctive anchor.", 0.92
             ),
@@ -803,7 +811,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         cleaned = clean_plain_text(text, math_mode="latex")
 
-        self.assertIn("$y$, the post-processed vector f(E(y))", cleaned)
+        self.assertIn("$y$, the post-processed vector $f(E(y))$", cleaned)
         self.assertIn("$f(E(y))$", cleaned)
         self.assertIn("$\\alpha =0.34", cleaned)
         self.assertIn("$y={\\mathrm{average }}", cleaned)
@@ -867,6 +875,11 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
                 "or ReLU",
                 "$ReLU$",
                 "in some models.",
+                "Make a small multilayer perceptronf",
+                "$f$",
+                "so that the vector f(E(y))",
+                "$f(E(y))$",
+                "has the same dimensions.",
                 "But model",
                 "$model$",
                 "and language",
@@ -886,6 +899,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "The activation is $softmax$ or $sigmoid$ or $ReLU$ in some models.",
             cleaned,
         )
+        self.assertIn(
+            "Make a small multilayer perceptron $f$ so that the vector $f(E(y))$ has the same dimensions.",
+            cleaned,
+        )
         self.assertIn("But model $model$ and language $language$", cleaned)
         self.assertNotIn("N $N$", cleaned)
         self.assertNotIn("i $i$", cleaned)
@@ -896,6 +913,8 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("softmax $softmax$", cleaned)
         self.assertNotIn("sigmoid $sigmoid$", cleaned)
         self.assertNotIn("ReLU $ReLU$", cleaned)
+        self.assertNotIn("perceptronf $f$", cleaned)
+        self.assertNotIn("f(E(y)) $f(E(y))$", cleaned)
         self.assertNotIn("\n$i$", cleaned)
 
     def test_math_keep_preserves_raw_displaystyle(self):

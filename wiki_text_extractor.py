@@ -54,6 +54,8 @@ SIMPLE_LATEX_LINE_PATTERN = re.compile(r"^\s*\$[A-Za-z][A-Za-z0-9_]*\$\s*$")
 INLINE_DUPLICATE_LATEX_SYMBOL_PATTERN = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*)\s+\$\1\$"
 )
+MERGED_WORD_LATEX_SYMBOL_PATTERN = re.compile(r"\b([A-Za-z]{4,})([A-Za-z])\s+\$\2\$")
+INLINE_DUPLICATE_LATEX_FUNCTION_PATTERN = re.compile(r"\b([A-Za-z]\([^$\n]+?\))\s+\$\1\$")
 GREEK_LETTER_PATTERN = re.compile(r"[\u0370-\u03ff]")
 RENDERED_MATH_FUNCTION_PATTERN = re.compile(r"\b(?:Pr|log|sin|cos|tan|exp|token)\s*\(")
 LANGUAGE_FOLDER_NAMES = {
@@ -867,6 +869,9 @@ def join_inline_latex_lines(text: str) -> str:
 
 def remove_inline_duplicate_latex_symbols(text: str) -> str:
     # Removes rendered one-letter symbols that duplicate adjacent inline LaTeX.
+    text = MERGED_WORD_LATEX_SYMBOL_PATTERN.sub(r"\1 $\2$", text)
+    text = INLINE_DUPLICATE_LATEX_FUNCTION_PATTERN.sub(r"$\1$", text)
+
     def replace_duplicate(match: re.Match[str]) -> str:
         identifier = match.group(1)
         if (
@@ -1031,9 +1036,66 @@ def normalize_for_match(text: str) -> str:
     # Builds a forgiving comparison string for pasted browser text and cleaned output.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = INLINE_REFERENCE_PATTERN.sub("", text)
+    text = normalize_math_for_match(text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     text = re.sub(r"\s+", " ", text)
     return text.casefold().strip()
+
+
+def simplify_math_for_match(value: str) -> str:
+    # Reduces LaTeX/rendered math to comparable identifier-like text for fuzzy matching.
+    value = re.sub(r"\\(?:displaystyle|mathrm|text|operatorname)\s*", " ", value)
+    value = re.sub(r"\\(?:frac|begin|end|sum|log|Pr|mid|left|right)\b", " ", value)
+    value = re.sub(r"\\[A-Za-z]+", " ", value)
+    value = re.sub(r"[_^{}$\\]", " ", value)
+    value = re.sub(r"[^0-9A-Za-z]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def replace_displaystyle_for_match(text: str) -> str:
+    # Converts MediaWiki displaystyle fragments in pasted text into comparable math tokens.
+    marker = r"{\displaystyle"
+    parts: list[str] = []
+    start = 0
+    while True:
+        marker_index = text.find(marker, start)
+        if marker_index == -1:
+            parts.append(text[start:])
+            return "".join(parts)
+
+        parts.append(text[start:marker_index])
+        depth = 0
+        end_index = None
+        for index in range(marker_index, len(text)):
+            char = text[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end_index = index
+                    break
+        if end_index is None:
+            parts.append(text[marker_index:])
+            return "".join(parts)
+
+        latex = text[marker_index + len(marker) : end_index]
+        simplified = simplify_math_for_match(latex)
+        if simplified:
+            parts.append(f" {simplified} ")
+        start = end_index + 1
+
+
+def normalize_math_for_match(text: str) -> str:
+    # Makes copied rendered math and cleaned LaTeX close enough for boundary matching.
+    text = replace_displaystyle_for_match(text)
+    text = re.sub(
+        r"\$([^$]+)\$",
+        lambda match: f" {simplify_math_for_match(match.group(1))} ",
+        text,
+    )
+    text = re.sub(r"\b([A-Za-z][A-Za-z0-9_]*)\s+\1\b", r"\1", text)
+    return text
 
 
 def normalize_match_index_map(text: str) -> tuple[str, list[int]]:
@@ -1136,9 +1198,16 @@ def strong_anchor_candidates(
         normalized = normalize_for_match(unit)
         if not normalized:
             continue
-        anchor = unit[:anchor_size] if side == "start" else unit[-anchor_size:]
-        if normalize_for_match(anchor) and anchor not in candidates:
-            candidates.append(anchor)
+        lengths = [180, 120, 240, anchor_size] if side == "start" else [anchor_size, 240, 180, 120]
+        for length in lengths:
+            length = min(length, len(unit))
+            if length < 80 and len(unit) >= 80:
+                continue
+            anchor = unit[:length] if side == "start" else unit[-length:]
+            if normalize_for_match(anchor) and anchor not in candidates:
+                candidates.append(anchor)
+            if len(candidates) >= max_candidates:
+                break
         if len(candidates) >= max_candidates:
             break
 
@@ -1159,6 +1228,14 @@ def required_partial_anchor_score(anchor: str, threshold: float) -> float:
     # Requires stricter matches for very short anchors because they are less unique.
     if len(normalize_for_match(anchor)) < 14:
         return max(threshold, 0.95)
+    tail_tokens = re.findall(r"\b[A-Za-z]\b", anchor[-140:])
+    if (
+        line_looks_like_math_heavy(anchor)
+        or "{\\displaystyle" in anchor
+        or "$" in anchor
+        or len(tail_tokens) >= 5
+    ):
+        return max(0.87, threshold - 0.05)
     return threshold
 
 

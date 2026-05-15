@@ -170,6 +170,7 @@ class WikipediaTextParser(HTMLParser):
         "mwe-math-mathml-display",
         "mwe-math-mathml-inline",
     }
+    VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 
     def __init__(self, include_reference_markers: bool = False) -> None:
         # Initializes parser state for clean article text and optional inline citation markers.
@@ -204,7 +205,7 @@ class WikipediaTextParser(HTMLParser):
         element_id = attr_map.get("id", "")
         heading_level = int(tag[1]) if re.fullmatch(r"h[1-6]", tag) else None
         in_math = tag == "math" or bool(classes.intersection(self.MATH_CLASSES))
-        if in_math:
+        if in_math and tag not in self.VOID_TAGS:
             self._math_depth += 1
             self._math_tag_stack.append(tag)
 
@@ -465,8 +466,9 @@ class WikipediaTextParser(HTMLParser):
 
     def _close_math_tag(self, tag: str) -> bool:
         # Tracks when a math container closes so normal subscript behavior can resume.
-        if self._math_tag_stack and self._math_tag_stack[-1] == tag:
-            self._math_tag_stack.pop()
+        if tag in self._math_tag_stack:
+            index = len(self._math_tag_stack) - 1 - self._math_tag_stack[::-1].index(tag)
+            self._math_tag_stack.pop(index)
             self._math_depth -= 1
             return True
         return False

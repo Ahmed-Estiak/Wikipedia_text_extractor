@@ -101,6 +101,21 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("H ello", cleaned)
         self.assertNotIn("e mail", cleaned)
 
+    def test_preserves_link_space_after_math_html(self):
+        # Verifies a previous math container does not make later link whitespace disappear.
+        html = """
+        <div class="mw-parser-output">
+          <span class="mwe-math-element"><span><math>x</math></span></span>
+          <img class="mwe-math-fallback-image-inline" alt="{\\displaystyle y}" />
+          <p>with a <a href="/wiki/Log-log_plot">log-log</a> <a href="/wiki/Learning_rate">learning rate</a> schedule.</p>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html, math_mode="latex")
+
+        self.assertIn("log-log learning rate schedule.", cleaned)
+        self.assertNotIn("log-loglearning", cleaned)
+
     def test_does_not_split_normal_hyphenated_terms(self):
         # Verifies normal hyphen chains are not changed by cleanup.
         cleaned = clean_plain_text(

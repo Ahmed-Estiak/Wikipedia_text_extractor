@@ -628,6 +628,12 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(args.math, "latex")
 
+    def test_partial_html_module_does_not_import_topic_heading_wrapper(self):
+        # Verifies partial output is not forced to start with the page title.
+        import extract_partial_html
+
+        self.assertFalse(hasattr(extract_partial_html, "add_topic_heading"))
+
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.
         self.assertEqual(lower_alpha_label(1), "a")

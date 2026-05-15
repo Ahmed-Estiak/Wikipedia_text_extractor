@@ -100,8 +100,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         pasted_text = read_pasted_text(input_path)
         started_at = time.perf_counter()
+        fetch_started_at = time.perf_counter()
         html = fetch_page_html(page)
+        fetch_seconds = time.perf_counter() - fetch_started_at
+        clean_started_at = time.perf_counter()
         full_text = clean_wikipedia_html(html, args.math)
+        clean_seconds = time.perf_counter() - clean_started_at
+        match_started_at = time.perf_counter()
         result = extract_partial_text(
             full_text,
             pasted_text,
@@ -109,12 +114,16 @@ def main(argv: Iterable[str] | None = None) -> int:
             anchor_size=args.anchor_size,
             max_candidates=args.anchor_candidates,
         )
+        match_seconds = time.perf_counter() - match_started_at
         seconds = time.perf_counter() - started_at
         report_text = "\n".join(
             [
                 format_partial_match_report(result, args.threshold),
                 "",
-                f"Runtime: {seconds:.3f} seconds",
+                f"Total runtime: {seconds:.3f} seconds",
+                f"Fetch runtime: {fetch_seconds:.3f} seconds",
+                f"Clean runtime: {clean_seconds:.3f} seconds",
+                f"Match runtime: {match_seconds:.3f} seconds",
                 f"Input file: {input_path}",
                 f"Math mode: {args.math}",
             ]

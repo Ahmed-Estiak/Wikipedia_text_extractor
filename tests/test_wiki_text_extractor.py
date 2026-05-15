@@ -400,6 +400,32 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("- converting spatial words", cleaned)
         self.assertNotIn("[79]", cleaned)
 
+    def test_html_parser_keeps_further_reading_citation_list_items(self):
+        # Verifies Further reading keeps citation-wrapped list items instead of only plain items.
+        html = """
+        <div class="mw-parser-output">
+          <p>Article body.</p>
+          <div class="mw-heading mw-heading2"><h2 id="Further_reading">Further reading</h2></div>
+          <ul>
+            <li>Jurafsky, Dan. Speech and Language Processing, 2023.</li>
+            <li><cite class="citation journal cs1">Yin, Shukang. A Survey on Multimodal Large Language Models. 2024.</cite></li>
+            <li><cite class="citation web cs1">AI Index Report 2024. Retrieved 5 May 2024.</cite></li>
+          </ul>
+          <div class="mw-heading mw-heading2"><h2 id="References">References</h2></div>
+          <ol class="references">
+            <li><cite class="citation journal cs1">Hidden source.</cite></li>
+          </ol>
+        </div>
+        """
+
+        cleaned = clean_wikipedia_html(html)
+
+        self.assertIn("== Further reading ==", cleaned)
+        self.assertIn("- Jurafsky, Dan. Speech and Language Processing, 2023.", cleaned)
+        self.assertIn("- Yin, Shukang. A Survey on Multimodal Large Language Models. 2024.", cleaned)
+        self.assertIn("- AI Index Report 2024. Retrieved 5 May 2024.", cleaned)
+        self.assertNotIn("Hidden source.", cleaned)
+
     def test_html_parser_generates_lower_alpha_note_labels(self):
         # Verifies lower-alpha note references keep a./b. labels and drop backlink markers.
         html = """

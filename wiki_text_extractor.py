@@ -136,7 +136,6 @@ class WikipediaTextParser(HTMLParser):
         "ambox",
         "asbox",
         "catlinks",
-        "citation",
         "hatnote",
         "infobox",
         "image",
@@ -160,9 +159,7 @@ class WikipediaTextParser(HTMLParser):
         "toc",
         "vertical-navbox",
     }
-    SKIP_IDS = {
-        "Further_reading",
-    }
+    SKIP_IDS: set[str] = set()
     MATH_CLASSES = {
         "mwe-math-element",
         "mwe-math-fallback-image-display",

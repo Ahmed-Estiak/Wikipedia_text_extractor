@@ -1573,22 +1573,38 @@ def hybrid_window_score(left: str, right: str) -> float:
     if not left_normalized or not right_normalized:
         return 0.0
     token_score = token_overlap_score(left, right)
+    left_tokens = text_tokens(left)
+    right_tokens = text_tokens(right)
+    if left_tokens and right_tokens:
+        token_score = max(
+            token_score,
+            len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens)),
+        )
     char_score = fuzzy_ratio(left_normalized, right_normalized)
+    shorter, longer = sorted((left_normalized, right_normalized), key=len)
+    if len(shorter) >= 50 and longer.startswith(shorter):
+        char_score = max(char_score, 0.95)
     return 0.60 * token_score + 0.40 * char_score
 
 
-def sentence_window_chunks(sentences: list[TextSentence], reverse: bool = False) -> list[tuple[int, int, str]]:
-    # Builds copied 3-sentence chunks with step 3 and a final backfilled 3-sentence chunk.
-    if len(sentences) < 3:
+def sentence_window_chunks(
+    sentences: list[TextSentence], reverse: bool = False, window_size: int = 3
+) -> list[tuple[int, int, str]]:
+    # Builds copied sentence chunks with step 3 and a final backfilled chunk.
+    if window_size < 1 or len(sentences) < window_size:
         return []
-    starts = list(range(0, len(sentences) - 2, 3))
-    final_start = max(0, len(sentences) - 3)
+    starts = list(range(0, len(sentences) - window_size + 1, 3))
+    final_start = max(0, len(sentences) - window_size)
     if final_start not in starts:
         starts.append(final_start)
     if reverse:
         starts = list(reversed(starts))
     return [
-        (start, start + 3, " ".join(sentence.text for sentence in sentences[start : start + 3]))
+        (
+            start,
+            start + window_size,
+            " ".join(sentence.text for sentence in sentences[start : start + window_size]),
+        )
         for start in starts
     ]
 
@@ -1607,21 +1623,26 @@ def find_sentence_window_match(
         for index, sentence in enumerate(clean_sentences)
         if sentence.start >= clean_start and sentence.end <= clean_end
     ]
-    if len(clean_indexes) < 3:
+    if not clean_indexes:
         return None
-    clean_window_starts = clean_indexes[:-2]
+    window_size = 3 if len(clean_indexes) >= 3 else len(clean_indexes)
+    if len(copied_sentences) < window_size:
+        return None
+    clean_window_starts = clean_indexes[: len(clean_indexes) - window_size + 1]
     if reverse:
         clean_window_starts = list(reversed(clean_window_starts))
-    for _copied_start, _copied_end, copied_text in sentence_window_chunks(copied_sentences, reverse):
+    for _copied_start, _copied_end, copied_text in sentence_window_chunks(
+        copied_sentences, reverse, window_size
+    ):
         best: tuple[int, int, int, int, float] | None = None
         for clean_index in clean_window_starts:
-            window = clean_sentences[clean_index : clean_index + 3]
+            window = clean_sentences[clean_index : clean_index + window_size]
             clean_text = " ".join(sentence.text for sentence in window)
             if token_overlap_score(copied_text, clean_text) < 0.30:
                 continue
             score = hybrid_window_score(copied_text, clean_text)
             if score >= threshold and (best is None or score > best[4]):
-                best = (_copied_start, _copied_end, clean_index, clean_index + 3, score)
+                best = (_copied_start, _copied_end, clean_index, clean_index + window_size, score)
         if best is not None:
             return best
     return None
@@ -1695,6 +1716,14 @@ def references_heading_in_text(text: str) -> bool:
     )
 
 
+def next_heading_start(headings: list[TextHeading], heading: TextHeading, default: int) -> int:
+    # Returns the next clean heading start after a matched heading.
+    for candidate in headings:
+        if candidate.start > heading.start:
+            return candidate.start
+    return default
+
+
 def normalize_copied_text_for_hybrid_sentences(
     copied_text: str, clean_headings: list[TextHeading]
 ) -> str:
@@ -1744,7 +1773,6 @@ def extract_partial_hybrid_text(
     confidence = "medium"
     first_heading = matched_headings[0] if matched_headings else None
     last_heading = matched_headings[-1] if matched_headings else None
-    end_search_allowed = not matched_headings
     if matched_headings:
         coarse_start = first_heading.start
         coarse_end = last_heading.end
@@ -1788,7 +1816,6 @@ def extract_partial_hybrid_text(
             if end_candidates:
                 citation_end = clean_index.sentences[end_candidates[-1][1].sentence_index].end
                 coarse_end = max(coarse_end, citation_end) if matched_headings else citation_end
-                end_search_allowed = True
                 report_lines.append(f"End citation sequence: {', '.join(end_sequence)}")
             elif matched_headings:
                 report_lines.append("End citation sequence ignored: all matches are above last heading.")
@@ -1827,14 +1854,30 @@ def extract_partial_hybrid_text(
         report_lines.append("Start sentence-window match failed; used structural fallback.")
 
     end_search_start = last_heading.end if last_heading is not None else start
+    end_search_limit = (
+        next_heading_start(clean_index.headings, last_heading, min(len(clean_text), coarse_end + 4000))
+        if last_heading is not None
+        else min(len(clean_text), coarse_end + 4000)
+    )
+    end_copied_sentences = copied_sentences
+    if last_heading is not None and copied_headings:
+        copied_tail = copied_text[copied_headings[-1].end :]
+        copied_tail_clean = normalize_copied_text_for_hybrid_sentences(
+            copied_tail, clean_index.headings
+        )
+        tail_sentences = sentence_spans(copied_tail_clean)
+        if tail_sentences:
+            end_copied_sentences = tail_sentences
+            report_lines.append("End copied sentence range: after last matched heading.")
+
     end_match = (
         None
-        if copied_has_references_heading or not end_search_allowed
+        if copied_has_references_heading
         else find_sentence_window_match(
-            copied_sentences,
+            end_copied_sentences,
             clean_index.sentences,
             end_search_start,
-            min(len(clean_text), coarse_end + 4000),
+            end_search_limit,
             True,
             threshold,
         )
@@ -1844,7 +1887,7 @@ def extract_partial_hybrid_text(
         end = body_end
     elif end_match:
         clean_end_index = refine_sentence_end(
-            copied_sentences,
+            end_copied_sentences,
             clean_index.sentences,
             end_match[1],
             end_match[3],
@@ -1853,11 +1896,8 @@ def extract_partial_hybrid_text(
         report_lines.append(f"End sentence-window score: {end_match[4]:.3f}")
     else:
         end = coarse_end
-        if matched_headings and not end_search_allowed:
-            report_lines.append("End sentence-window skipped: no citation after last heading.")
-        else:
-            confidence = "low"
-            report_lines.append("End sentence-window match failed; used structural fallback.")
+        confidence = "low"
+        report_lines.append("End sentence-window match failed; used structural fallback.")
 
     if start >= end:
         message = "failed: hybrid boundaries are invalid"

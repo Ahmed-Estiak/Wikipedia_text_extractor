@@ -780,8 +780,8 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Despite sophisticated architectures", normalized)
         self.assertIn("These hallucinations arise", normalized)
 
-    def test_hybrid_end_stops_after_last_heading_without_later_citation(self):
-        # Verifies the end boundary cannot move above the last matched heading.
+    def test_hybrid_end_searches_below_last_heading_without_later_citation(self):
+        # Verifies the end boundary searches below the last matched heading without using the heading as a sentence.
         clean = (
             "Before selected section.[1]\n\n"
             "A cited example sentence closes one subsection.[119] "
@@ -807,12 +807,11 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertIn("== Limitations and challenges ==", result.text)
         self.assertIn("== Hallucinations ==", result.text)
-        self.assertNotIn("These hallucinations arise", result.text)
-        self.assertTrue(result.text.endswith("== Hallucinations =="))
-        self.assertIn("End sentence-window skipped: no citation after last heading.", result.report)
+        self.assertIn("These hallucinations arise partly through memorization.", result.text)
+        self.assertIn("End sentence-window score:", result.report)
 
     def test_hybrid_end_can_extend_after_last_heading_when_later_citation_exists(self):
-        # Verifies the end boundary may include last-heading body only when citation appears after it.
+        # Verifies citations after the last matched heading can still strengthen the same end search.
         clean = (
             "Before selected section.[1]\n\n"
             "A cited example sentence closes one subsection.[119] "

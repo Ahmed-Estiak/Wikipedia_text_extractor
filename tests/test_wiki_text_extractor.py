@@ -19,6 +19,7 @@ from wiki_text_extractor import (
     partial_hybrid_report_path,
     partial_match_report_path,
     partial_output_path,
+    normalize_copied_text_for_hybrid_sentences,
     extract_partial_text,
     PartialExtractionError,
     required_partial_anchor_score,
@@ -753,6 +754,61 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertTrue(result.text.endswith("Final body sentence comes before references.[3]"))
         self.assertNotIn("== References ==", result.text)
         self.assertIn("References heading in copied input: yes", result.report)
+
+    def test_hybrid_sentence_normalization_drops_copied_headings_and_hatnotes(self):
+        # Verifies copied headings/hatnotes do not pollute sentence-window matching.
+        clean = (
+            "== Limitations and challenges ==\n\n"
+            "Despite sophisticated architectures, models have documented limitations.\n\n"
+            "== Hallucinations ==\n\n"
+            "Hallucinations represent a fundamental challenge. These hallucinations arise partly through memorization."
+        )
+        copied = (
+            "Limitations and challenges\n"
+            "Despite sophisticated architectures, models have documented limitations.\n\n"
+            "Hallucinations\n"
+            "Main article: Hallucination (artificial intelligence)\n"
+            "Hallucinations represent a fundamental challenge. These hallucinations arise"
+        )
+        index = build_hybrid_text_index(clean)
+
+        normalized = normalize_copied_text_for_hybrid_sentences(copied, index.headings)
+
+        self.assertNotIn("Limitations and challenges", normalized)
+        self.assertNotIn("Hallucinations\nMain article", normalized)
+        self.assertNotIn("Main article:", normalized)
+        self.assertIn("Despite sophisticated architectures", normalized)
+        self.assertIn("These hallucinations arise", normalized)
+
+    def test_hybrid_end_can_extend_past_last_citation_to_later_headings(self):
+        # Verifies end matching prefers the pasted tail after copied headings over an earlier citation match.
+        clean = (
+            "Before selected section.[1]\n\n"
+            "A cited example sentence closes one subsection.[119] "
+            "Another cited example appears in a numbered list.[120] "
+            "BERT selects 2 as the likely completion, though the correct answer is 4.[120]\n\n"
+            "== Limitations and challenges ==\n\n"
+            "Despite sophisticated architectures and massive scale, large language models exhibit limitations.\n\n"
+            "== Hallucinations ==\n\n"
+            "Hallucinations represent a fundamental challenge. These hallucinations arise partly through memorization."
+        )
+        copied = (
+            "A cited example sentence closes one subsection.[119]\n"
+            "Another cited example appears in a numbered list.[120]\n"
+            "BERT selects 2 as the likely completion, though the correct answer is 4.[120]\n\n"
+            "Limitations and challenges\n"
+            "Despite sophisticated architectures and massive scale, large language models exhibit limitations.\n\n"
+            "Hallucinations\n"
+            "Main article: Hallucination (artificial intelligence)\n"
+            "Hallucinations represent a fundamental challenge. These hallucinations arise"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("== Limitations and challenges ==", result.text)
+        self.assertIn("== Hallucinations ==", result.text)
+        self.assertIn("These hallucinations arise", result.text)
+        self.assertTrue(result.end > clean.index("== Hallucinations =="))
 
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.

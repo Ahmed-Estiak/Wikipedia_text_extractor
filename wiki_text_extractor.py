@@ -1695,6 +1695,28 @@ def references_heading_in_text(text: str) -> bool:
     )
 
 
+def normalize_copied_text_for_hybrid_sentences(
+    copied_text: str, clean_headings: list[TextHeading]
+) -> str:
+    # Removes structural/noisy copied lines before sentence-window matching.
+    heading_titles = {normalize_for_match(heading.title) for heading in clean_headings}
+    kept_lines: list[str] = []
+    for line in copied_text.replace("\r\n", "\n").replace("\r", "\n").splitlines():
+        stripped = line.strip()
+        normalized = normalize_for_match(stripped.strip(" =\t"))
+        if not stripped:
+            kept_lines.append(line)
+            continue
+        if normalized in heading_titles:
+            continue
+        if re.match(r"^(?:main article|see also)\s*:", stripped, flags=re.IGNORECASE):
+            continue
+        if line_looks_like_partial_noise(line):
+            continue
+        kept_lines.append(line)
+    return "\n".join(kept_lines)
+
+
 def extract_partial_hybrid_text(
     clean_text: str,
     copied_text: str,
@@ -1702,12 +1724,10 @@ def extract_partial_hybrid_text(
 ) -> HybridExtractionResult:
     # Uses heading/citation structural anchors plus sentence-window matching to slice clean text.
     clean_index = build_hybrid_text_index(clean_text)
-    copied_clean = "\n".join(
-        line for line in copied_text.splitlines() if not line_looks_like_partial_noise(line)
-    )
-    copied_sentences = sentence_spans(copied_clean)
     copied_headings = copied_heading_candidates(copied_text, clean_index.headings)
     matched_headings = heading_position_matches(copied_headings, clean_index.headings)
+    copied_clean = normalize_copied_text_for_hybrid_sentences(copied_text, clean_index.headings)
+    copied_sentences = sentence_spans(copied_clean)
     copied_citations = citation_numbers(copied_text)
     body_end = clean_index.references_start if clean_index.references_start is not None else len(clean_text)
 

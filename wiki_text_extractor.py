@@ -90,6 +90,51 @@ class PartialExtractionResult:
     threshold: float
 
 
+@dataclass(frozen=True)
+class TextHeading:
+    # Records one formatted heading and its character offset in cleaned text.
+    title: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class TextSentence:
+    # Records one sentence-like unit and its character offsets in cleaned text.
+    text: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class CitationOccurrence:
+    # Records one inline citation marker and the sentence it belongs to.
+    number: str
+    start: int
+    end: int
+    sentence_index: int
+
+
+@dataclass(frozen=True)
+class HybridTextIndex:
+    # Lightweight structural index used by the heading/citation hybrid extractor.
+    text: str
+    headings: list[TextHeading]
+    sentences: list[TextSentence]
+    citations: list[CitationOccurrence]
+    references_start: int | None
+
+
+@dataclass(frozen=True)
+class HybridExtractionResult:
+    # Carries hybrid partial output and a readable decision report.
+    text: str
+    report: str
+    start: int
+    end: int
+    confidence: str
+
+
 class PartialExtractionError(ValueError):
     """Raised when pasted text cannot be matched reliably enough."""
 
@@ -1412,6 +1457,361 @@ def extract_partial_text(
     return PartialExtractionResult(text, start_match, end_match, threshold)
 
 
+def sentence_spans(text: str) -> list[TextSentence]:
+    # Splits text into sentence-like units while preserving offsets for slicing.
+    citation_tail = r"(?:\s*\[\d+(?:\s*[,\u2013-]\s*\d+)*\])*"
+    pattern = re.compile(rf"[^.!?\n]+(?:[.!?]+{citation_tail}[\"')\]]*)?", re.MULTILINE)
+    sentences: list[TextSentence] = []
+    for match in pattern.finditer(text):
+        sentence = re.sub(r"\s+", " ", match.group(0)).strip()
+        if not sentence or SECTION_HEADING_PATTERN.match(sentence):
+            continue
+        if len(normalize_for_match(sentence)) < 8:
+            continue
+        sentences.append(TextSentence(sentence, match.start(), match.end()))
+    return sentences
+
+
+def extract_heading_spans(text: str) -> list[TextHeading]:
+    # Finds normalized == Heading == lines in cleaned text.
+    headings: list[TextHeading] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        match = SECTION_HEADING_PATTERN.match(stripped)
+        if match:
+            start = offset + line.find(stripped)
+            headings.append(TextHeading(match.group(2).strip(), start, start + len(stripped)))
+        offset += len(line)
+    return headings
+
+
+def sentence_index_at(sentences: list[TextSentence], char_index: int) -> int:
+    # Finds the sentence containing a character offset, or the nearest previous sentence.
+    for index, sentence in enumerate(sentences):
+        if sentence.start <= char_index < sentence.end:
+            return index
+        if char_index < sentence.start:
+            return max(0, index - 1)
+    return max(0, len(sentences) - 1)
+
+
+def build_hybrid_text_index(text: str) -> HybridTextIndex:
+    # Builds headings, sentences, citations, and References boundary for hybrid matching.
+    headings = extract_heading_spans(text)
+    sentences = sentence_spans(text)
+    references_start = next(
+        (heading.start for heading in headings if heading.title.casefold() == "references"),
+        None,
+    )
+    citations: list[CitationOccurrence] = []
+    body_limit = references_start if references_start is not None else len(text)
+    for match in INLINE_REFERENCE_PATTERN.finditer(text[:body_limit]):
+        citations.append(
+            CitationOccurrence(
+                match.group(0).strip("[]"),
+                match.start(),
+                match.end(),
+                sentence_index_at(sentences, match.start()),
+            )
+        )
+    return HybridTextIndex(text, headings, sentences, citations, references_start)
+
+
+def copied_heading_candidates(copied_text: str, clean_headings: list[TextHeading]) -> list[TextHeading]:
+    # Detects copied heading lines by comparing them to known clean headings.
+    candidates: list[TextHeading] = []
+    clean_by_norm = {normalize_for_match(heading.title): heading for heading in clean_headings}
+    offset = 0
+    for line in copied_text.replace("\r\n", "\n").replace("\r", "\n").splitlines(keepends=True):
+        stripped = line.strip(" =\t\r\n")
+        normalized = normalize_for_match(stripped)
+        if normalized in clean_by_norm:
+            start = offset + line.find(stripped)
+            candidates.append(TextHeading(stripped, start, start + len(stripped)))
+        offset += len(line)
+    return candidates
+
+
+def citation_numbers(text: str) -> list[str]:
+    # Extracts inline citation numbers from copied or cleaned text.
+    return [match.group(0).strip("[]") for match in INLINE_REFERENCE_PATTERN.finditer(text)]
+
+
+def citation_sequence_matches(
+    citations: list[CitationOccurrence], sequence: list[str]
+) -> list[tuple[CitationOccurrence, CitationOccurrence]]:
+    # Finds ordered contiguous citation-number sequences in the clean citation index.
+    if not sequence:
+        return []
+    matches: list[tuple[CitationOccurrence, CitationOccurrence]] = []
+    size = len(sequence)
+    for index in range(0, len(citations) - size + 1):
+        if [citation.number for citation in citations[index : index + size]] == sequence:
+            matches.append((citations[index], citations[index + size - 1]))
+    return matches
+
+
+def text_tokens(text: str) -> set[str]:
+    # Tokenizes normalized text for cheap overlap filtering.
+    return set(re.findall(r"[a-z0-9]+", normalize_for_match(text)))
+
+
+def token_overlap_score(left: str, right: str) -> float:
+    # Scores token overlap without caring about exact punctuation or spacing.
+    left_tokens = text_tokens(left)
+    right_tokens = text_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / max(len(left_tokens), len(right_tokens))
+
+
+def hybrid_window_score(left: str, right: str) -> float:
+    # Blends token overlap and character sequence similarity.
+    left_normalized = normalize_for_match(left)
+    right_normalized = normalize_for_match(right)
+    if not left_normalized or not right_normalized:
+        return 0.0
+    token_score = token_overlap_score(left, right)
+    char_score = fuzzy_ratio(left_normalized, right_normalized)
+    return 0.60 * token_score + 0.40 * char_score
+
+
+def sentence_window_chunks(sentences: list[TextSentence], reverse: bool = False) -> list[tuple[int, int, str]]:
+    # Builds copied 3-sentence chunks with step 3 and a final backfilled 3-sentence chunk.
+    if len(sentences) < 3:
+        return []
+    starts = list(range(0, len(sentences) - 2, 3))
+    final_start = max(0, len(sentences) - 3)
+    if final_start not in starts:
+        starts.append(final_start)
+    if reverse:
+        starts = list(reversed(starts))
+    return [
+        (start, start + 3, " ".join(sentence.text for sentence in sentences[start : start + 3]))
+        for start in starts
+    ]
+
+
+def find_sentence_window_match(
+    copied_sentences: list[TextSentence],
+    clean_sentences: list[TextSentence],
+    clean_start: int,
+    clean_end: int,
+    reverse: bool = False,
+    threshold: float = 0.84,
+) -> tuple[int, int, int, int, float] | None:
+    # Finds the first copied 3-sentence chunk that has a strong clean sliding-window match.
+    clean_indexes = [
+        index
+        for index, sentence in enumerate(clean_sentences)
+        if sentence.start >= clean_start and sentence.end <= clean_end
+    ]
+    if len(clean_indexes) < 3:
+        return None
+    clean_window_starts = clean_indexes[:-2]
+    if reverse:
+        clean_window_starts = list(reversed(clean_window_starts))
+    for _copied_start, _copied_end, copied_text in sentence_window_chunks(copied_sentences, reverse):
+        best: tuple[int, int, int, int, float] | None = None
+        for clean_index in clean_window_starts:
+            window = clean_sentences[clean_index : clean_index + 3]
+            clean_text = " ".join(sentence.text for sentence in window)
+            if token_overlap_score(copied_text, clean_text) < 0.30:
+                continue
+            score = hybrid_window_score(copied_text, clean_text)
+            if score >= threshold and (best is None or score > best[4]):
+                best = (_copied_start, _copied_end, clean_index, clean_index + 3, score)
+        if best is not None:
+            return best
+    return None
+
+
+def refine_sentence_start(
+    copied_sentences: list[TextSentence],
+    clean_sentences: list[TextSentence],
+    copied_anchor_start: int,
+    clean_anchor_start: int,
+    threshold: float = 0.88,
+) -> int:
+    # Expands a confirmed start anchor backward one sentence at a time until two failures.
+    copied_index = copied_anchor_start - 1
+    clean_index = clean_anchor_start - 1
+    failures = 0
+    start_index = clean_anchor_start
+    while copied_index >= 0 and clean_index >= 0 and failures < 2:
+        score = hybrid_window_score(copied_sentences[copied_index].text, clean_sentences[clean_index].text)
+        if score >= threshold:
+            start_index = clean_index
+            failures = 0
+        else:
+            failures += 1
+        copied_index -= 1
+        clean_index -= 1
+    return start_index
+
+
+def refine_sentence_end(
+    copied_sentences: list[TextSentence],
+    clean_sentences: list[TextSentence],
+    copied_anchor_end: int,
+    clean_anchor_end: int,
+    threshold: float = 0.88,
+) -> int:
+    # Expands a confirmed end anchor forward one sentence at a time until two failures.
+    copied_index = copied_anchor_end
+    clean_index = clean_anchor_end
+    failures = 0
+    end_index = clean_anchor_end
+    while copied_index < len(copied_sentences) and clean_index < len(clean_sentences) and failures < 2:
+        score = hybrid_window_score(copied_sentences[copied_index].text, clean_sentences[clean_index].text)
+        if score >= threshold:
+            end_index = clean_index + 1
+            failures = 0
+        else:
+            failures += 1
+        copied_index += 1
+        clean_index += 1
+    return end_index
+
+
+def heading_position_matches(
+    copied_headings: list[TextHeading], clean_headings: list[TextHeading]
+) -> list[TextHeading]:
+    # Maps copied heading titles to clean heading positions while preserving copied order.
+    clean_by_norm = {normalize_for_match(heading.title): heading for heading in clean_headings}
+    return [
+        clean_by_norm[normalize_for_match(heading.title)]
+        for heading in copied_headings
+        if normalize_for_match(heading.title) in clean_by_norm
+    ]
+
+
+def references_heading_in_text(text: str) -> bool:
+    # Detects whether the pasted input itself reached a References heading.
+    return any(
+        normalize_for_match(line.strip(" =\t")) == "references"
+        for line in text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    )
+
+
+def extract_partial_hybrid_text(
+    clean_text: str,
+    copied_text: str,
+    threshold: float = 0.84,
+) -> HybridExtractionResult:
+    # Uses heading/citation structural anchors plus sentence-window matching to slice clean text.
+    clean_index = build_hybrid_text_index(clean_text)
+    copied_clean = "\n".join(
+        line for line in copied_text.splitlines() if not line_looks_like_partial_noise(line)
+    )
+    copied_sentences = sentence_spans(copied_clean)
+    copied_headings = copied_heading_candidates(copied_text, clean_index.headings)
+    matched_headings = heading_position_matches(copied_headings, clean_index.headings)
+    copied_citations = citation_numbers(copied_text)
+    body_end = clean_index.references_start if clean_index.references_start is not None else len(clean_text)
+
+    report_lines = [
+        "Wikipedia Hybrid Partial Extraction Report",
+        "",
+        f"Copied headings: {', '.join(h.title for h in copied_headings) or 'none'}",
+        f"Matched headings: {', '.join(h.title for h in matched_headings) or 'none'}",
+        f"Copied citations: {', '.join(copied_citations) or 'none'}",
+    ]
+
+    coarse_start = 0
+    coarse_end = body_end
+    confidence = "medium"
+    if matched_headings:
+        coarse_start = matched_headings[0].start
+        coarse_end = matched_headings[-1].end
+        confidence = "high"
+
+    if copied_citations:
+        if len(copied_citations) >= 6:
+            start_sequence = copied_citations[:3]
+            end_sequence = copied_citations[-3:]
+        else:
+            start_sequence = copied_citations
+            end_sequence = copied_citations
+        start_matches = citation_sequence_matches(clean_index.citations, start_sequence)
+        end_matches = citation_sequence_matches(clean_index.citations, end_sequence)
+        if start_matches:
+            citation_start = clean_index.sentences[start_matches[0][0].sentence_index].start
+            coarse_start = min(coarse_start, citation_start) if matched_headings else citation_start
+            report_lines.append(f"Start citation sequence: {', '.join(start_sequence)}")
+        if end_matches:
+            citation_end = clean_index.sentences[end_matches[-1][1].sentence_index].end
+            coarse_end = max(coarse_end, citation_end) if matched_headings else citation_end
+            report_lines.append(f"End citation sequence: {', '.join(end_sequence)}")
+
+    copied_has_references_heading = references_heading_in_text(copied_text)
+    if copied_has_references_heading:
+        coarse_end = body_end
+        report_lines.append("References heading in copied input: yes; end set before clean References.")
+
+    if not copied_sentences:
+        message = "failed: no usable copied sentences found"
+        raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
+
+    start_match = find_sentence_window_match(
+        copied_sentences, clean_index.sentences, max(0, coarse_start - 4000), coarse_end, False, threshold
+    )
+
+    if start_match:
+        clean_start_index = refine_sentence_start(
+            copied_sentences,
+            clean_index.sentences,
+            start_match[0],
+            start_match[2],
+        )
+        start = clean_index.sentences[clean_start_index].start
+        report_lines.append(f"Start sentence-window score: {start_match[4]:.3f}")
+    else:
+        start = coarse_start
+        confidence = "low"
+        report_lines.append("Start sentence-window match failed; used structural fallback.")
+
+    end_match = None if copied_has_references_heading else find_sentence_window_match(
+        copied_sentences,
+        clean_index.sentences,
+        start,
+        min(len(clean_text), coarse_end + 4000),
+        True,
+        threshold,
+    )
+
+    if copied_has_references_heading:
+        end = body_end
+    elif end_match:
+        clean_end_index = refine_sentence_end(
+            copied_sentences,
+            clean_index.sentences,
+            end_match[1],
+            end_match[3],
+        )
+        end = clean_index.sentences[min(clean_end_index, len(clean_index.sentences)) - 1].end
+        report_lines.append(f"End sentence-window score: {end_match[4]:.3f}")
+    else:
+        end = coarse_end
+        confidence = "low"
+        report_lines.append("End sentence-window match failed; used structural fallback.")
+
+    if start >= end:
+        message = "failed: hybrid boundaries are invalid"
+        raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
+
+    report_lines.extend(
+        [
+            f"Confidence: {confidence}",
+            f"Start offset: {start}",
+            f"End offset: {end}",
+            f"Output characters: {end - start}",
+        ]
+    )
+    return HybridExtractionResult(clean_text[start:end].strip(), "\n".join(report_lines), start, end, confidence)
+
+
 def extract_note_section(text: str) -> str:
     # Returns the Note/Notes section text if present in formatted or plain form.
     lines = text.splitlines()
@@ -1558,6 +1958,16 @@ def partial_match_report_path(output: str, page: PageRequest) -> Path:
     return output_directory(output, page) / "partial_match_report.txt"
 
 
+def partial_hybrid_output_path(output: str, page: PageRequest) -> Path:
+    # Builds the hybrid partial extraction output path.
+    return output_directory(output, page) / "partial_hybrid_text.txt"
+
+
+def partial_hybrid_report_path(output: str, page: PageRequest) -> Path:
+    # Builds the hybrid partial extraction report path.
+    return output_directory(output, page) / "partial_hybrid_match_report.txt"
+
+
 def write_text_file(path: Path, text: str) -> None:
     # Writes UTF-8 text after creating any missing output directories.
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1574,6 +1984,8 @@ def runtime_label_order(label: str) -> tuple[int, str]:
         return 2, label
     if label.startswith("Partial HTML runtime"):
         return 3, label
+    if label.startswith("Partial hybrid runtime"):
+        return 4, label
     return 9, label
 
 

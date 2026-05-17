@@ -4,14 +4,19 @@ import unittest
 from wiki_text_extractor import (
     PageRequest,
     add_topic_heading,
+    build_hybrid_text_index,
     clean_plain_text,
     clean_wikipedia_html_with_references,
     clean_wikipedia_html,
     compare_texts,
     comparison_output_path,
+    citation_sequence_matches,
     extraction_output_path,
+    extract_partial_hybrid_text,
     output_path_for_method,
     page_request_from_url,
+    partial_hybrid_output_path,
+    partial_hybrid_report_path,
     partial_match_report_path,
     partial_output_path,
     extract_partial_text,
@@ -27,6 +32,8 @@ from wiki_text_extractor import (
     remove_empty_note_section,
     raw_output_path,
     lower_alpha_label,
+    sentence_spans,
+    sentence_window_chunks,
 )
 
 
@@ -642,6 +649,111 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertFalse(hasattr(extract_partial_html, "add_topic_heading"))
 
+    def test_partial_hybrid_cli_defaults_to_latex_math(self):
+        # Verifies the hybrid partial command also keeps LaTeX math by default.
+        from extract_partial_hybrid import build_parser
+
+        args = build_parser().parse_args(["--url", "https://en.wikipedia.org/wiki/Kuiper_belt"])
+
+        self.assertEqual(args.math, "latex")
+
+    def test_hybrid_index_extracts_headings_citations_and_references_boundary(self):
+        # Verifies the hybrid index sees structural headings/citations but excludes final references.
+        text = (
+            "Lead sentence.[1]\n\n"
+            "== Methods ==\n\n"
+            "Method sentence keeps citation.[2]\n\n"
+            "== References ==\n\n"
+            "1. Source text.\n\n"
+            "2. Other source."
+        )
+
+        index = build_hybrid_text_index(text)
+
+        self.assertEqual([heading.title for heading in index.headings], ["Methods", "References"])
+        self.assertEqual([citation.number for citation in index.citations], ["1", "2"])
+        self.assertEqual(index.references_start, text.index("== References =="))
+
+    def test_hybrid_citation_sequence_matching(self):
+        # Verifies contiguous citation sequences can be located cheaply before fuzzy matching.
+        text = (
+            "Alpha sentence.[10] Beta sentence.[11] Gamma sentence.[12] "
+            "Delta sentence.[10] Epsilon sentence.[11] Zeta sentence.[12]"
+        )
+        index = build_hybrid_text_index(text)
+
+        matches = citation_sequence_matches(index.citations, ["10", "11", "12"])
+
+        self.assertEqual(len(matches), 2)
+        self.assertEqual(matches[0][0].number, "10")
+        self.assertEqual(matches[0][1].number, "12")
+
+    def test_sentence_window_chunks_step_three_with_tail_backfill(self):
+        # Verifies copied chunks step by three sentences and backfill short tails to three.
+        sentences = sentence_spans(
+            "One sentence. Two sentence. Three sentence. Four sentence. "
+            "Five sentence. Six sentence. Seven sentence. Eight sentence."
+        )
+
+        chunks = sentence_window_chunks(sentences)
+
+        self.assertEqual([chunk[:2] for chunk in chunks], [(0, 3), (3, 6), (5, 8)])
+
+    def test_hybrid_extraction_uses_citations_and_sentence_windows(self):
+        # Verifies refs-enabled copied text can extract a clean partial body range.
+        clean = (
+            "Lead sentence before the target.\n\n"
+            "== Multimodal models ==\n\n"
+            "A common method creates multimodal models from a language model.[66] "
+            "The image encoder may be frozen to improve stability.[67] "
+            "This type of method is called early fusion.[68]\n\n"
+            "Another method, called intermediate fusion, mixes layers during training.[69] "
+            "Late fusion combines final predictions after each model runs.[70] "
+            "These designs remain active research topics.[71]\n\n"
+            "== References ==\n\n"
+            "1. Source."
+        )
+        copied = (
+            "A common method creates multimodal models from a language model.[66]\n"
+            "The image encoder may be frozen to improve stability.[67]\n"
+            "This type of method is called early fusion.[68]\n\n"
+            "Another method, called intermediate fusion, mixes layers during training.[69]\n"
+            "Late fusion combines final predictions after each model runs.[70]\n"
+            "These designs remain active research topics.[71]"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.startswith("A common method creates"))
+        self.assertTrue(result.text.endswith("active research topics.[71]"))
+        self.assertNotIn("Lead sentence before", result.text)
+        self.assertNotIn("== References ==", result.text)
+        self.assertIn("Start citation sequence: 66, 67, 68", result.report)
+        self.assertIn("End citation sequence: 69, 70, 71", result.report)
+
+    def test_hybrid_references_heading_forces_body_end(self):
+        # Verifies copied References heading means the selected body stops before clean references.
+        clean = (
+            "Target starts with enough detail for matching.[1] "
+            "Middle sentence keeps context for the window.[2] "
+            "Final body sentence comes before references.[3]\n\n"
+            "== References ==\n\n"
+            "1. First source."
+        )
+        copied = (
+            "Target starts with enough detail for matching.[1]\n"
+            "Middle sentence keeps context for the window.[2]\n"
+            "Final body sentence comes before references.[3]\n\n"
+            "References\n\n"
+            "1. First source."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.endswith("Final body sentence comes before references.[3]"))
+        self.assertNotIn("== References ==", result.text)
+        self.assertIn("References heading in copied input: yes", result.report)
+
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.
         self.assertEqual(lower_alpha_label(1), "a")
@@ -740,6 +852,14 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(
             partial_match_report_path("output/kuiper_belt.txt", page),
             Path("output/Kuiper_belt/English/partial_match_report.txt"),
+        )
+        self.assertEqual(
+            partial_hybrid_output_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/partial_hybrid_text.txt"),
+        )
+        self.assertEqual(
+            partial_hybrid_report_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/partial_hybrid_match_report.txt"),
         )
 
     def test_compare_texts_reports_mismatch(self):

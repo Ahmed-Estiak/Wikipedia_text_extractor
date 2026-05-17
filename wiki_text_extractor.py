@@ -1742,9 +1742,12 @@ def extract_partial_hybrid_text(
     coarse_start = 0
     coarse_end = body_end
     confidence = "medium"
+    first_heading = matched_headings[0] if matched_headings else None
+    last_heading = matched_headings[-1] if matched_headings else None
+    end_search_allowed = not matched_headings
     if matched_headings:
-        coarse_start = matched_headings[0].start
-        coarse_end = matched_headings[-1].end
+        coarse_start = first_heading.start
+        coarse_end = last_heading.end
         confidence = "high"
 
     if copied_citations:
@@ -1757,13 +1760,38 @@ def extract_partial_hybrid_text(
         start_matches = citation_sequence_matches(clean_index.citations, start_sequence)
         end_matches = citation_sequence_matches(clean_index.citations, end_sequence)
         if start_matches:
-            citation_start = clean_index.sentences[start_matches[0][0].sentence_index].start
-            coarse_start = min(coarse_start, citation_start) if matched_headings else citation_start
-            report_lines.append(f"Start citation sequence: {', '.join(start_sequence)}")
+            start_candidates = (
+                [
+                    match
+                    for match in start_matches
+                    if first_heading is None or match[0].start < first_heading.start
+                ]
+                if matched_headings
+                else start_matches
+            )
+            if start_candidates:
+                citation_start = clean_index.sentences[start_candidates[0][0].sentence_index].start
+                coarse_start = min(coarse_start, citation_start) if matched_headings else citation_start
+                report_lines.append(f"Start citation sequence: {', '.join(start_sequence)}")
+            elif matched_headings:
+                report_lines.append("Start citation sequence ignored: all matches are below first heading.")
         if end_matches:
-            citation_end = clean_index.sentences[end_matches[-1][1].sentence_index].end
-            coarse_end = max(coarse_end, citation_end) if matched_headings else citation_end
-            report_lines.append(f"End citation sequence: {', '.join(end_sequence)}")
+            end_candidates = (
+                [
+                    match
+                    for match in end_matches
+                    if last_heading is None or match[1].end > last_heading.end
+                ]
+                if matched_headings
+                else end_matches
+            )
+            if end_candidates:
+                citation_end = clean_index.sentences[end_candidates[-1][1].sentence_index].end
+                coarse_end = max(coarse_end, citation_end) if matched_headings else citation_end
+                end_search_allowed = True
+                report_lines.append(f"End citation sequence: {', '.join(end_sequence)}")
+            elif matched_headings:
+                report_lines.append("End citation sequence ignored: all matches are above last heading.")
 
     copied_has_references_heading = references_heading_in_text(copied_text)
     if copied_has_references_heading:
@@ -1774,8 +1802,14 @@ def extract_partial_hybrid_text(
         message = "failed: no usable copied sentences found"
         raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
 
+    start_search_end = first_heading.start if first_heading is not None else coarse_end
     start_match = find_sentence_window_match(
-        copied_sentences, clean_index.sentences, max(0, coarse_start - 4000), coarse_end, False, threshold
+        copied_sentences,
+        clean_index.sentences,
+        max(0, coarse_start - 4000),
+        start_search_end,
+        False,
+        threshold,
     )
 
     if start_match:
@@ -1792,13 +1826,18 @@ def extract_partial_hybrid_text(
         confidence = "low"
         report_lines.append("Start sentence-window match failed; used structural fallback.")
 
-    end_match = None if copied_has_references_heading else find_sentence_window_match(
-        copied_sentences,
-        clean_index.sentences,
-        start,
-        min(len(clean_text), coarse_end + 4000),
-        True,
-        threshold,
+    end_search_start = last_heading.end if last_heading is not None else start
+    end_match = (
+        None
+        if copied_has_references_heading or not end_search_allowed
+        else find_sentence_window_match(
+            copied_sentences,
+            clean_index.sentences,
+            end_search_start,
+            min(len(clean_text), coarse_end + 4000),
+            True,
+            threshold,
+        )
     )
 
     if copied_has_references_heading:
@@ -1814,8 +1853,11 @@ def extract_partial_hybrid_text(
         report_lines.append(f"End sentence-window score: {end_match[4]:.3f}")
     else:
         end = coarse_end
-        confidence = "low"
-        report_lines.append("End sentence-window match failed; used structural fallback.")
+        if matched_headings and not end_search_allowed:
+            report_lines.append("End sentence-window skipped: no citation after last heading.")
+        else:
+            confidence = "low"
+            report_lines.append("End sentence-window match failed; used structural fallback.")
 
     if start >= end:
         message = "failed: hybrid boundaries are invalid"

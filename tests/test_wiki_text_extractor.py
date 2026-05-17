@@ -780,8 +780,8 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Despite sophisticated architectures", normalized)
         self.assertIn("These hallucinations arise", normalized)
 
-    def test_hybrid_end_can_extend_past_last_citation_to_later_headings(self):
-        # Verifies end matching prefers the pasted tail after copied headings over an earlier citation match.
+    def test_hybrid_end_stops_after_last_heading_without_later_citation(self):
+        # Verifies the end boundary cannot move above the last matched heading.
         clean = (
             "Before selected section.[1]\n\n"
             "A cited example sentence closes one subsection.[119] "
@@ -807,8 +807,58 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertIn("== Limitations and challenges ==", result.text)
         self.assertIn("== Hallucinations ==", result.text)
-        self.assertIn("These hallucinations arise", result.text)
-        self.assertTrue(result.end > clean.index("== Hallucinations =="))
+        self.assertNotIn("These hallucinations arise", result.text)
+        self.assertTrue(result.text.endswith("== Hallucinations =="))
+        self.assertIn("End sentence-window skipped: no citation after last heading.", result.report)
+
+    def test_hybrid_end_can_extend_after_last_heading_when_later_citation_exists(self):
+        # Verifies the end boundary may include last-heading body only when citation appears after it.
+        clean = (
+            "Before selected section.[1]\n\n"
+            "A cited example sentence closes one subsection.[119] "
+            "BERT selects 2 as the likely completion, though the correct answer is 4.[120]\n\n"
+            "== Hallucinations ==\n\n"
+            "Hallucinations represent a fundamental challenge. "
+            "These hallucinations arise partly through memorization.[121]"
+        )
+        copied = (
+            "A cited example sentence closes one subsection.[119]\n"
+            "BERT selects 2 as the likely completion, though the correct answer is 4.[120]\n\n"
+            "Hallucinations\n"
+            "Main article: Hallucination (artificial intelligence)\n"
+            "Hallucinations represent a fundamental challenge. "
+            "These hallucinations arise partly through memorization.[121]"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("== Hallucinations ==", result.text)
+        self.assertIn("These hallucinations arise partly through memorization.[121]", result.text)
+        self.assertIn("End citation sequence: 119, 120, 121", result.report)
+
+    def test_hybrid_start_does_not_search_below_first_heading(self):
+        # Verifies first matched heading is the start fallback when no citation appears above it.
+        clean = (
+            "Earlier unrelated article text should stay out.\n\n"
+            "== Evaluation ==\n\n"
+            "Perplexity is a common evaluation method.[37] "
+            "Benchmarks compare models on tasks.[38] "
+            "Results can depend on prompts.[39]\n\n"
+            "== Later ==\n\n"
+            "Later section text.[40]"
+        )
+        copied = (
+            "Evaluation\n"
+            "Perplexity is a common evaluation method.[37] "
+            "Benchmarks compare models on tasks.[38] "
+            "Results can depend on prompts.[39]"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.startswith("== Evaluation =="))
+        self.assertNotIn("Earlier unrelated article text", result.text)
+        self.assertIn("Start sentence-window match failed; used structural fallback.", result.report)
 
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.

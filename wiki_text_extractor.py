@@ -225,10 +225,15 @@ class WikipediaTextParser(HTMLParser):
     }
     VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 
-    def __init__(self, include_reference_markers: bool = False) -> None:
+    def __init__(
+        self,
+        include_reference_markers: bool = False,
+        reference_section_text: str = "",
+    ) -> None:
         # Initializes parser state for clean article text and optional inline citation markers.
         super().__init__(convert_charrefs=True)
         self._include_reference_markers = include_reference_markers
+        self._reference_section_text = reference_section_text
         self._parts: list[str] = []
         self._skip_depth = 0
         self._sup_depth = 0
@@ -268,6 +273,10 @@ class WikipediaTextParser(HTMLParser):
             self._heading_level = heading_level
 
         if self._heading_level is not None and element_id in REMOVED_SECTION_IDS:
+            if element_id == "References" and self._reference_section_text:
+                self._add_break()
+                self._parts.append(self._reference_section_text)
+                self._add_break()
             self._skip_section_level = self._heading_level
             self._heading_buffer = None
             self._skip_depth += 1
@@ -727,8 +736,13 @@ def lower_alpha_label(index: int) -> str:
     return label
 
 
-def remove_unwanted_sections(text: str) -> str:
+def remove_unwanted_sections(text: str, remove_references_section: bool = True) -> str:
     # Drops unwanted terminal sections while keeping Notes available for HTML output.
+    removed_section_titles = set(REMOVED_SECTION_TITLES)
+    plain_section_titles = set(PLAIN_SECTION_TITLES)
+    if not remove_references_section:
+        removed_section_titles.discard("references")
+        plain_section_titles.discard("references")
     lines = text.splitlines()
     kept: list[str] = []
     skip_level: int | None = None
@@ -742,13 +756,13 @@ def remove_unwanted_sections(text: str) -> str:
             if skip_level is not None and level <= skip_level:
                 skip_level = None
             skip_plain_section = False
-            if title in REMOVED_SECTION_TITLES:
+            if title in removed_section_titles:
                 skip_level = level
                 continue
 
         plain_title = line.strip().casefold()
-        if plain_title in PLAIN_SECTION_TITLES:
-            skip_plain_section = plain_title in REMOVED_SECTION_TITLES
+        if plain_title in plain_section_titles:
+            skip_plain_section = plain_title in removed_section_titles
             if not skip_plain_section:
                 kept.append(line)
             continue
@@ -1030,11 +1044,14 @@ def clean_math(text: str, math_mode: str) -> str:
 
 
 def clean_plain_text(
-    text: str, math_mode: str = "remove", remove_inline_references: bool = True
+    text: str,
+    math_mode: str = "remove",
+    remove_inline_references: bool = True,
+    remove_references_section: bool = True,
 ) -> str:
     # Runs shared text cleanup used by both extracts and HTML paths.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = remove_unwanted_sections(text)
+    text = remove_unwanted_sections(text, remove_references_section)
     text = clean_leading_caret_markers(text)
     if remove_inline_references:
         text = INLINE_REFERENCE_PATTERN.sub("", text)
@@ -1072,18 +1089,20 @@ def extract_references_from_html(html: str) -> str:
 def clean_wikipedia_html_with_references(
     html: str, math_mode: str = "remove", include_inline_markers: bool = True
 ) -> str:
-    # Builds an HTML-derived article copy with appended References.
-    if include_inline_markers:
-        parser = WikipediaTextParser(include_reference_markers=True)
-        parser.feed(html)
-        parser.close()
-        body = clean_plain_text(
-            parser.get_text(), math_mode, remove_inline_references=False
-        )
-    else:
-        body = clean_wikipedia_html(html, math_mode)
+    # Re-inserts rebuilt numeric References at the original References heading position.
     references = extract_references_from_html(html)
-    return "\n\n".join(part for part in (body, references) if part).strip()
+    parser = WikipediaTextParser(
+        include_reference_markers=include_inline_markers,
+        reference_section_text=references,
+    )
+    parser.feed(html)
+    parser.close()
+    return clean_plain_text(
+        parser.get_text(),
+        math_mode,
+        remove_inline_references=not include_inline_markers,
+        remove_references_section=not bool(references),
+    )
 
 
 def normalize_for_match(text: str) -> str:

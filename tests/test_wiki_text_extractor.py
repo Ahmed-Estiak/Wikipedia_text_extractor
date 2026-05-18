@@ -456,7 +456,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("^", cleaned)
 
     def test_html_references_export_keeps_markers_and_numeric_references(self):
-        # Verifies optional references export keeps inline markers and appends numeric references.
+        # Verifies optional references export keeps inline markers and numeric references.
         html = """
         <div class="mw-parser-output">
           <p>Article text.<sup class="reference"><a><span>[</span>1<span>]</span></a></sup> More text.</p>
@@ -480,6 +480,33 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("== References ==\n\n1. First source. Retrieved 2024.", text)
         self.assertIn("2. Second source.", text)
         self.assertNotIn("3. A note, not a numeric reference.", text)
+
+    def test_html_references_export_preserves_references_section_order(self):
+        # Verifies rebuilt References stay at the original References heading position.
+        html = """
+        <div class="mw-parser-output">
+          <p>Article text.<sup class="reference"><a><span>[</span>1<span>]</span></a></sup></p>
+          <div class="mw-heading mw-heading2"><h2 id="References">References</h2></div>
+          <ol class="references">
+            <li><span class="reference-text">First source.</span></li>
+          </ol>
+          <div class="mw-heading mw-heading2"><h2 id="Further_reading">Further reading</h2></div>
+          <ul>
+            <li>Further source.</li>
+          </ul>
+          <div class="mw-heading mw-heading2"><h2 id="External_links">External links</h2></div>
+          <ul>
+            <li>Hidden external link.</li>
+          </ul>
+        </div>
+        """
+
+        text = clean_wikipedia_html_with_references(html)
+
+        self.assertLess(text.index("== References =="), text.index("== Further reading =="))
+        self.assertIn("== References ==\n\n1. First source.", text)
+        self.assertIn("== Further reading ==\n\n- Further source.", text)
+        self.assertNotIn("Hidden external link.", text)
 
     def test_html_references_export_can_keep_sources_only_at_end(self):
         # Verifies references export can omit inline markers while keeping the final source list.

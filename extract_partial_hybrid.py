@@ -11,7 +11,9 @@ from typing import Iterable
 from wiki_text_extractor import (
     PageRequest,
     PartialExtractionError,
+    PARTIAL_REFERENCE_MODES,
     clean_wikipedia_html_with_references,
+    extract_reference_entries_from_html,
     extract_partial_hybrid_text,
     fetch_page_html,
     page_request_from_url,
@@ -59,6 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.84,
         help="Minimum sentence-window score for structural boundary refinement",
     )
+    parser.add_argument(
+        "--references",
+        choices=PARTIAL_REFERENCE_MODES,
+        default="none",
+        help="Reference output policy: none removes inline refs, original keeps selected original refs, smart renumbers selected refs",
+    )
     return parser
 
 
@@ -101,6 +109,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             full_text,
             pasted_text,
             threshold=args.threshold,
+            references_mode=args.references,
+            reference_entries=extract_reference_entries_from_html(html),
         )
         match_seconds = time.perf_counter() - match_started_at
         seconds = time.perf_counter() - started_at
@@ -114,6 +124,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 f"Match runtime: {match_seconds:.3f} seconds",
                 f"Input file: {input_path}",
                 f"Math mode: {args.math}",
+                f"References mode: {args.references}",
             ]
         )
         write_text_file(output_path, result.text)

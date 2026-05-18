@@ -21,6 +21,7 @@ API_TEMPLATE = "https://{lang}.wikipedia.org/w/api.php"
 USER_AGENT = "WikipediaTextExtractor/0.1"
 EXTRACTION_METHODS = ("extracts", "html")
 MATH_MODES = ("remove", "latex", "keep")
+PARTIAL_REFERENCE_MODES = ("none", "original", "smart")
 MATH_IDENTIFIER_ALLOWLIST = {
     "argmax",
     "argmin",
@@ -42,6 +43,7 @@ MATH_IDENTIFIER_ALLOWLIST = {
 REMOVED_SECTION_TITLES = {"see also", "references", "external links"}
 REMOVED_SECTION_IDS = {"See_also", "References", "External_links"}
 PLAIN_SECTION_TITLES = REMOVED_SECTION_TITLES | {"note", "notes"}
+HYBRID_IGNORED_HEADING_TITLES = {"see also", "references", "external links"}
 SECTION_HEADING_PATTERN = re.compile(r"^\s*(=+)\s*(.*?)\s*\1\s*$")
 INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
 MAINTENANCE_MARKER_PATTERN = re.compile(
@@ -1068,6 +1070,16 @@ def clean_plain_text(
     return text.strip()
 
 
+def normalize_final_text_spacing(text: str) -> str:
+    # Applies final whitespace/heading cleanup without re-running math or section removal.
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    return format_heading_spacing(text).strip()
+
+
 def clean_wikipedia_html(html: str, math_mode: str = "remove") -> str:
     # Converts Wikipedia HTML to clean article text without inline citation numbers.
     parser = WikipediaTextParser()
@@ -1084,6 +1096,19 @@ def extract_references_from_html(html: str) -> str:
     if not parser.references:
         return ""
     return "== References ==\n\n" + "\n\n".join(parser.references)
+
+
+def extract_reference_entries_from_html(html: str) -> dict[str, str]:
+    # Extracts numeric References entries keyed by their original citation number.
+    parser = WikipediaReferencesParser()
+    parser.feed(html)
+    parser.close()
+    entries: dict[str, str] = {}
+    for reference in parser.references:
+        number, separator, text = reference.partition(". ")
+        if separator and number.isdigit():
+            entries[number] = text
+    return entries
 
 
 def clean_wikipedia_html_with_references(
@@ -1660,10 +1685,39 @@ def sentence_index_at(sentences: list[TextSentence], char_index: int) -> int:
     return max(0, len(sentences) - 1)
 
 
+def heading_section_spans(
+    headings: list[TextHeading], titles: set[str], text_length: int
+) -> list[tuple[int, int]]:
+    # Returns character spans covered by headings whose titles should be ignored.
+    spans: list[tuple[int, int]] = []
+    for index, heading in enumerate(headings):
+        if heading.title.casefold() not in titles:
+            continue
+        end = headings[index + 1].start if index + 1 < len(headings) else text_length
+        spans.append((heading.start, end))
+    return spans
+
+
+def span_is_inside_ignored_sections(
+    start: int, end: int, ignored_spans: list[tuple[int, int]]
+) -> bool:
+    # Checks whether a sentence/list item is fully inside an ignored section.
+    return any(start >= span_start and end <= span_end for span_start, span_end in ignored_spans)
+
+
 def build_hybrid_text_index(text: str) -> HybridTextIndex:
     # Builds headings, sentences, citations, and References boundary for hybrid matching.
     headings = extract_heading_spans(text)
-    sentences = sentence_spans(text)
+    ignored_spans = heading_section_spans(
+        headings, HYBRID_IGNORED_HEADING_TITLES, len(text)
+    )
+    sentences = [
+        sentence
+        for sentence in sentence_spans(text)
+        if not span_is_inside_ignored_sections(
+            sentence.start, sentence.end, ignored_spans
+        )
+    ]
     references_start = next(
         (heading.start for heading in headings if heading.title.casefold() == "references"),
         None,
@@ -1686,10 +1740,16 @@ def copied_heading_candidates(copied_text: str, clean_headings: list[TextHeading
     # Detects copied heading lines by comparing them to known clean headings.
     candidates: list[TextHeading] = []
     clean_by_norm = {normalize_for_match(heading.title): heading for heading in clean_headings}
+    ignored_titles = {
+        normalize_for_match(title) for title in HYBRID_IGNORED_HEADING_TITLES
+    }
     offset = 0
     for line in copied_text.replace("\r\n", "\n").replace("\r", "\n").splitlines(keepends=True):
         stripped = line.strip(" =\t\r\n")
         normalized = normalize_for_match(stripped)
+        if normalized in ignored_titles:
+            offset += len(line)
+            continue
         if normalized in clean_by_norm:
             start = offset + line.find(stripped)
             candidates.append(TextHeading(stripped, start, start + len(stripped)))
@@ -2107,6 +2167,173 @@ def references_heading_in_text(text: str) -> bool:
     )
 
 
+def reference_section_span(text: str) -> tuple[int, int] | None:
+    # Finds a formatted References section inside already-cleaned text.
+    headings = extract_heading_spans(text)
+    for index, heading in enumerate(headings):
+        if heading.title.casefold() != "references":
+            continue
+        end = headings[index + 1].start if index + 1 < len(headings) else len(text)
+        return heading.start, end
+    return None
+
+
+def remove_reference_section(text: str) -> str:
+    # Removes only the formatted References section while preserving later sections.
+    span = reference_section_span(text)
+    if span is None:
+        return text.strip()
+    start, end = span
+    return (text[:start].rstrip() + "\n\n" + text[end:].lstrip()).strip()
+
+
+def expand_citation_numbers(value: str) -> list[str]:
+    # Expands one citation marker payload such as "1, 3-5" into individual numbers.
+    numbers: list[str] = []
+    for part in re.split(r"\s*,\s*", value):
+        part = part.strip()
+        range_match = re.fullmatch(r"(\d+)\s*[\u2013-]\s*(\d+)", part)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2))
+            if start <= end and end - start <= 100:
+                numbers.extend(str(number) for number in range(start, end + 1))
+                continue
+        if part.isdigit():
+            numbers.append(part)
+    return numbers
+
+
+def citation_reference_numbers(text: str) -> list[str]:
+    # Extracts individual citation numbers in first-seen order for reference output.
+    numbers: list[str] = []
+    for match in INLINE_REFERENCE_PATTERN.finditer(text):
+        numbers.extend(expand_citation_numbers(match.group(0).strip("[]")))
+    return numbers
+
+
+def unique_in_order(values: Iterable[str]) -> list[str]:
+    # Keeps first occurrence order while dropping duplicates.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def build_reference_block(entries: list[tuple[str, str]]) -> str:
+    # Formats selected reference entries as a clean References section.
+    if not entries:
+        return ""
+    return "== References ==\n\n" + "\n\n".join(
+        f"{number}. {text}" for number, text in entries
+    )
+
+
+def remap_inline_reference_markers(text: str, mapping: dict[str, str]) -> str:
+    # Rewrites inline citation markers using the smart reference number map.
+    def replace(match: re.Match[str]) -> str:
+        numbers = expand_citation_numbers(match.group(0).strip("[]"))
+        remapped = [mapping[number] for number in numbers if number in mapping]
+        if not remapped:
+            return ""
+        return "[" + ", ".join(remapped) + "]"
+
+    return INLINE_REFERENCE_PATTERN.sub(replace, text)
+
+
+def selected_reference_entries(
+    reference_entries: dict[str, str],
+    citation_numbers_for_output: list[str],
+    mode: str,
+) -> tuple[list[tuple[str, str]], dict[str, str], list[str]]:
+    # Selects and optionally renumbers references requested for partial hybrid output.
+    unique_numbers = unique_in_order(citation_numbers_for_output)
+    present_numbers = [number for number in unique_numbers if number in reference_entries]
+    missing_numbers = [number for number in unique_numbers if number not in reference_entries]
+    if mode == "smart":
+        sorted_numbers = sorted(present_numbers, key=lambda value: int(value))
+        mapping = {
+            original_number: str(index)
+            for index, original_number in enumerate(sorted_numbers, start=1)
+        }
+        entries = [
+            (mapping[original_number], reference_entries[original_number])
+            for original_number in sorted_numbers
+        ]
+        return entries, mapping, missing_numbers
+    entries = [
+        (original_number, reference_entries[original_number])
+        for original_number in present_numbers
+    ]
+    return entries, {number: number for number in present_numbers}, missing_numbers
+
+
+def insert_reference_block(text: str, reference_block: str) -> str:
+    # Replaces an existing References section or appends one when the slice ended before it.
+    if not reference_block:
+        return remove_reference_section(text)
+    span = reference_section_span(text)
+    if span is None:
+        return (text.rstrip() + "\n\n" + reference_block).strip()
+    start, end = span
+    return (text[:start].rstrip() + "\n\n" + reference_block + "\n\n" + text[end:].lstrip()).strip()
+
+
+def finalize_partial_hybrid_output(
+    text: str,
+    references_mode: str,
+    copied_reference_numbers: list[str],
+    reference_entries: dict[str, str] | None,
+) -> tuple[str, list[str], list[str]]:
+    # Applies the requested partial-hybrid reference policy after matching is complete.
+    if references_mode not in PARTIAL_REFERENCE_MODES:
+        raise ValueError(f"Unsupported partial references mode: {references_mode}")
+    if references_mode == "none":
+        text = remove_reference_section(text)
+        text = INLINE_REFERENCE_PATTERN.sub("", text)
+        return normalize_final_text_spacing(text), [], []
+
+    entries, mapping, missing = selected_reference_entries(
+        reference_entries or {},
+        copied_reference_numbers,
+        references_mode,
+    )
+    if references_mode == "smart":
+        text = remap_inline_reference_markers(text, mapping)
+    reference_block = build_reference_block(entries)
+    text = insert_reference_block(text, reference_block)
+    return normalize_final_text_spacing(text), [number for number, _ in entries], missing
+
+
+def strip_copied_ignored_sections(
+    copied_text: str, clean_headings: list[TextHeading]
+) -> str:
+    # Removes copied References/See also/External links sections while keeping later valid sections.
+    clean_heading_titles = {normalize_for_match(heading.title) for heading in clean_headings}
+    ignored_titles = {
+        normalize_for_match(title) for title in HYBRID_IGNORED_HEADING_TITLES
+    }
+    kept_lines: list[str] = []
+    skipping_ignored_section = False
+    for line in copied_text.replace("\r\n", "\n").replace("\r", "\n").splitlines():
+        stripped = line.strip()
+        normalized = normalize_for_match(stripped.strip(" =\t"))
+        if normalized in ignored_titles:
+            skipping_ignored_section = True
+            continue
+        if skipping_ignored_section:
+            if normalized in clean_heading_titles and normalized not in ignored_titles:
+                skipping_ignored_section = False
+            else:
+                continue
+        kept_lines.append(line)
+    return "\n".join(kept_lines)
+
+
 def next_heading_start(headings: list[TextHeading], heading: TextHeading, default: int) -> int:
     # Returns the next clean heading start after a matched heading.
     for candidate in headings:
@@ -2119,14 +2346,20 @@ def normalize_copied_text_for_hybrid_sentences(
     copied_text: str, clean_headings: list[TextHeading]
 ) -> str:
     # Removes structural/noisy copied lines before sentence-window matching.
+    copied_text = strip_copied_ignored_sections(copied_text, clean_headings)
     copied_text = normalize_copied_math_for_hybrid(copied_text)
     heading_titles = {normalize_for_match(heading.title) for heading in clean_headings}
+    ignored_titles = {
+        normalize_for_match(title) for title in HYBRID_IGNORED_HEADING_TITLES
+    }
     kept_lines: list[str] = []
     for line in copied_text.replace("\r\n", "\n").replace("\r", "\n").splitlines():
         stripped = line.strip()
         normalized = normalize_for_match(stripped.strip(" =\t"))
         if not stripped:
             kept_lines.append(line)
+            continue
+        if normalized in ignored_titles:
             continue
         if normalized in heading_titles:
             continue
@@ -2142,15 +2375,26 @@ def extract_partial_hybrid_text(
     clean_text: str,
     copied_text: str,
     threshold: float = 0.84,
+    references_mode: str = "none",
+    reference_entries: dict[str, str] | None = None,
 ) -> HybridExtractionResult:
     # Uses heading/citation structural anchors plus sentence-window matching to slice clean text.
+    if references_mode not in PARTIAL_REFERENCE_MODES:
+        raise ValueError(f"Unsupported partial references mode: {references_mode}")
     clean_index = build_hybrid_text_index(clean_text)
-    copied_headings = copied_heading_candidates(copied_text, clean_index.headings)
+    copied_had_references_heading = references_heading_in_text(copied_text)
+    copied_matching_text = strip_copied_ignored_sections(
+        copied_text, clean_index.headings
+    )
+    copied_headings = copied_heading_candidates(copied_matching_text, clean_index.headings)
     matched_headings = heading_position_matches(copied_headings, clean_index.headings)
-    copied_clean = normalize_copied_text_for_hybrid_sentences(copied_text, clean_index.headings)
+    copied_clean = normalize_copied_text_for_hybrid_sentences(
+        copied_matching_text, clean_index.headings
+    )
     copied_sentences = sentence_spans(copied_clean)
-    copied_citations = citation_numbers(copied_text)
-    body_end = clean_index.references_start if clean_index.references_start is not None else len(clean_text)
+    copied_citations = citation_numbers(copied_matching_text)
+    copied_reference_numbers = citation_reference_numbers(copied_matching_text)
+    body_end = len(clean_text)
 
     report_lines = [
         "Wikipedia Hybrid Partial Extraction Report",
@@ -2158,6 +2402,8 @@ def extract_partial_hybrid_text(
         f"Copied headings: {', '.join(h.title for h in copied_headings) or 'none'}",
         f"Matched headings: {', '.join(h.title for h in matched_headings) or 'none'}",
         f"Copied citations: {', '.join(copied_citations) or 'none'}",
+        f"Copied References section ignored: {'yes' if copied_had_references_heading else 'no'}",
+        f"References mode: {references_mode}",
     ]
 
     coarse_start = 0
@@ -2214,18 +2460,13 @@ def extract_partial_hybrid_text(
             elif matched_headings:
                 report_lines.append("End citation sequence ignored: all matches are above last heading.")
 
-    copied_has_references_heading = references_heading_in_text(copied_text)
-    if copied_has_references_heading:
-        coarse_end = body_end
-        report_lines.append("References heading in copied input: yes; end set before clean References.")
-
     if not copied_sentences:
         message = "failed: no usable copied sentences found"
         raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
 
     start_copied_sentences = copied_sentences
     if first_heading is not None and copied_headings:
-        copied_head = copied_text[: copied_headings[0].start]
+        copied_head = copied_matching_text[: copied_headings[0].start]
         copied_head_clean = normalize_copied_text_for_hybrid_sentences(
             copied_head, clean_index.headings
         )
@@ -2282,7 +2523,7 @@ def extract_partial_hybrid_text(
     )
     end_copied_sentences = copied_sentences
     if last_heading is not None and copied_headings:
-        copied_tail = copied_text[copied_headings[-1].end :]
+        copied_tail = copied_matching_text[copied_headings[-1].end :]
         copied_tail_clean = normalize_copied_text_for_hybrid_sentences(
             copied_tail, clean_index.headings
         )
@@ -2291,23 +2532,17 @@ def extract_partial_hybrid_text(
             end_copied_sentences = tail_sentences
             report_lines.append("End copied sentence range: after last matched heading.")
 
-    end_match = (
-        None
-        if copied_has_references_heading
-        else find_sentence_window_match_with_short_fallback(
-            end_copied_sentences,
-            clean_index.sentences,
-            end_search_start,
-            end_search_limit,
-            True,
-            threshold,
-            allow_short_fallback=len(end_copied_sentences) < 7,
-        )
+    end_match = find_sentence_window_match_with_short_fallback(
+        end_copied_sentences,
+        clean_index.sentences,
+        end_search_start,
+        end_search_limit,
+        True,
+        threshold,
+        allow_short_fallback=len(end_copied_sentences) < 7,
     )
 
-    if copied_has_references_heading:
-        end = body_end
-    elif end_match:
+    if end_match:
         clean_end_index = refine_sentence_end(
             end_copied_sentences,
             clean_index.sentences,
@@ -2323,33 +2558,40 @@ def extract_partial_hybrid_text(
         confidence = "low"
         report_lines.append("End sentence-window match failed; used structural fallback.")
 
-    if not copied_has_references_heading:
-        partial_end = resolve_partial_end_boundary(
-            end_copied_sentences,
-            clean_index.sentences,
-            end_search_start,
-            end,
-            clean_max=end_search_limit,
-        )
-        if partial_end is not None:
-            end = partial_end[0]
-            if confidence == "low":
-                confidence = "medium"
-            report_lines.append(f"End partial sentence score: {partial_end[1]:.3f}")
+    partial_end = resolve_partial_end_boundary(
+        end_copied_sentences,
+        clean_index.sentences,
+        end_search_start,
+        end,
+        clean_max=end_search_limit,
+    )
+    if partial_end is not None:
+        end = partial_end[0]
+        if confidence == "low":
+            confidence = "medium"
+        report_lines.append(f"End partial sentence score: {partial_end[1]:.3f}")
 
     if start >= end:
         message = "failed: hybrid boundaries are invalid"
         raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
 
+    extracted_text, added_references, missing_references = finalize_partial_hybrid_output(
+        clean_text[start:end].strip(),
+        references_mode,
+        copied_reference_numbers,
+        reference_entries,
+    )
     report_lines.extend(
         [
+            f"References added: {', '.join(added_references) or 'none'}",
+            f"Missing reference entries: {', '.join(missing_references) or 'none'}",
             f"Confidence: {confidence}",
             f"Start offset: {start}",
             f"End offset: {end}",
-            f"Output characters: {end - start}",
+            f"Output characters: {len(extracted_text)}",
         ]
     )
-    return HybridExtractionResult(clean_text[start:end].strip(), "\n".join(report_lines), start, end, confidence)
+    return HybridExtractionResult(extracted_text, "\n".join(report_lines), start, end, confidence)
 
 
 def extract_note_section(text: str) -> str:

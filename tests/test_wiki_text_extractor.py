@@ -679,12 +679,13 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertFalse(hasattr(extract_partial_html, "add_topic_heading"))
 
     def test_partial_hybrid_cli_defaults_to_latex_math(self):
-        # Verifies the hybrid partial command also keeps LaTeX math by default.
+        # Verifies hybrid partial defaults keep LaTeX math and omit references.
         from extract_partial_hybrid import build_parser
 
         args = build_parser().parse_args(["--url", "https://en.wikipedia.org/wiki/Kuiper_belt"])
 
         self.assertEqual(args.math, "latex")
+        self.assertEqual(args.references, "none")
 
     def test_hybrid_index_extracts_headings_citations_and_references_boundary(self):
         # Verifies the hybrid index sees structural headings/citations but excludes final references.
@@ -702,6 +703,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual([heading.title for heading in index.headings], ["Methods", "References"])
         self.assertEqual([citation.number for citation in index.citations], ["1", "2"])
         self.assertEqual(index.references_start, text.index("== References =="))
+        self.assertNotIn("Source text.", " ".join(sentence.text for sentence in index.sentences))
 
     def test_hybrid_citation_sequence_matching(self):
         # Verifies contiguous citation sequences can be located cheaply before fuzzy matching.
@@ -801,9 +803,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         result = extract_partial_hybrid_text(clean, copied)
 
         self.assertTrue(result.text.startswith("A common method creates"))
-        self.assertTrue(result.text.endswith("active research topics.[71]"))
+        self.assertTrue(result.text.endswith("active research topics."))
         self.assertNotIn("Lead sentence before", result.text)
         self.assertNotIn("== References ==", result.text)
+        self.assertNotIn("[66]", result.text)
         self.assertIn("Start citation sequence: 66, 67, 68", result.report)
         self.assertIn("End citation sequence: 69, 70, 71", result.report)
 
@@ -826,9 +829,122 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         result = extract_partial_hybrid_text(clean, copied)
 
-        self.assertTrue(result.text.endswith("Final body sentence comes before references.[3]"))
+        self.assertTrue(result.text.endswith("Final body sentence comes before references."))
         self.assertNotIn("== References ==", result.text)
-        self.assertIn("References heading in copied input: yes", result.report)
+        self.assertIn("Copied References section ignored: yes", result.report)
+
+    def test_hybrid_ignores_copied_references_and_continues_to_later_heading(self):
+        # Verifies copied References are skipped while a later valid heading can still match.
+        clean = (
+            "Opening body sentence keeps a copied citation.[1]\n\n"
+            "== References ==\n\n"
+            "1. First source.\n\n"
+            "== Further reading ==\n\n"
+            "- Further source sentence for the selected range."
+        )
+        copied = (
+            "Opening body sentence keeps a copied citation.[1]\n\n"
+            "References\n\n"
+            "1. First source.\n\n"
+            "Further reading\n\n"
+            "Further source sentence for the selected range."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("Opening body sentence keeps a copied citation.", result.text)
+        self.assertIn("== Further reading ==", result.text)
+        self.assertIn("Further source sentence for the selected range.", result.text)
+        self.assertNotIn("== References ==", result.text)
+        self.assertNotIn("[1]", result.text)
+
+    def test_hybrid_original_references_adds_only_copied_reference_entries(self):
+        # Verifies original references mode keeps selected original citation numbers in place.
+        clean = (
+            "Opening body sentence cites a late source.[32] "
+            "Second body sentence cites an early source.[1]\n\n"
+            "== References ==\n\n"
+            "1. Early source.\n\n"
+            "2. Unused source.\n\n"
+            "32. Late source.\n\n"
+            "== Further reading ==\n\n"
+            "- Further source sentence."
+        )
+        copied = (
+            "Opening body sentence cites a late source.[32] "
+            "Second body sentence cites an early source.[1]\n\n"
+            "References\n\n"
+            "1. Early source.\n\n"
+            "32. Late source.\n\n"
+            "Further reading\n\n"
+            "Further source sentence."
+        )
+
+        result = extract_partial_hybrid_text(
+            clean,
+            copied,
+            references_mode="original",
+            reference_entries={
+                "1": "Early source.",
+                "2": "Unused source.",
+                "32": "Late source.",
+            },
+        )
+
+        self.assertIn("[32]", result.text)
+        self.assertIn("[1]", result.text)
+        self.assertLess(result.text.index("== References =="), result.text.index("== Further reading =="))
+        self.assertIn("32. Late source.", result.text)
+        self.assertIn("1. Early source.", result.text)
+        self.assertNotIn("2. Unused source.", result.text)
+
+    def test_hybrid_smart_references_remaps_sorted_sources_and_inline_markers(self):
+        # Verifies smart references sort originals, renumber sources, and remap inline markers.
+        clean = (
+            "Sentence A cites a late source.[32] "
+            "Sentence B cites an early source.[1] "
+            "Sentence C cites the next late source.[33] "
+            "Sentence D cites a small source.[5] "
+            "Sentence E cites two more sources.[34][35]\n\n"
+            "== References ==\n\n"
+            "1. Source one.\n\n"
+            "5. Source five.\n\n"
+            "32. Source thirty-two.\n\n"
+            "33. Source thirty-three.\n\n"
+            "34. Source thirty-four.\n\n"
+            "35. Source thirty-five."
+        )
+        copied = (
+            "Sentence A cites a late source.[32] "
+            "Sentence B cites an early source.[1] "
+            "Sentence C cites the next late source.[33] "
+            "Sentence D cites a small source.[5] "
+            "Sentence E cites two more sources.[34][35]"
+        )
+
+        result = extract_partial_hybrid_text(
+            clean,
+            copied,
+            references_mode="smart",
+            reference_entries={
+                "1": "Source one.",
+                "5": "Source five.",
+                "32": "Source thirty-two.",
+                "33": "Source thirty-three.",
+                "34": "Source thirty-four.",
+                "35": "Source thirty-five.",
+            },
+        )
+
+        self.assertIn("Sentence A cites a late source.[3]", result.text)
+        self.assertIn("Sentence B cites an early source.[1]", result.text)
+        self.assertIn("Sentence C cites the next late source.[4]", result.text)
+        self.assertIn("Sentence D cites a small source.[2]", result.text)
+        self.assertIn("Sentence E cites two more sources.[5][6]", result.text)
+        self.assertRegex(
+            result.text,
+            r"== References ==\n\n1\. Source one\.\n\n2\. Source five\.\n\n3\. Source thirty-two\.",
+        )
 
     def test_hybrid_sentence_normalization_drops_copied_headings_and_hatnotes(self):
         # Verifies copied headings/hatnotes do not pollute sentence-window matching.
@@ -907,7 +1023,8 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         result = extract_partial_hybrid_text(clean, copied)
 
         self.assertIn("== Hallucinations ==", result.text)
-        self.assertIn("These hallucinations arise partly through memorization.[121]", result.text)
+        self.assertIn("These hallucinations arise partly through memorization.", result.text)
+        self.assertNotIn("[121]", result.text)
         self.assertIn("End citation sequence: 119, 120, 121", result.report)
 
     def test_hybrid_start_does_not_search_below_first_heading(self):

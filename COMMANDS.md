@@ -151,10 +151,24 @@ Then run:
 .venv\Scripts\python.exe extract_partial_hybrid.py --url "https://en.wikipedia.org/wiki/Large_language_model"
 ```
 
+Default output removes inline citation numbers and does not add a References section.
+
 Optional custom input file:
 
 ```cmd
 .venv\Scripts\python.exe extract_partial_hybrid.py --url "https://en.wikipedia.org/wiki/Large_language_model" --input input_text\partial_input.txt
+```
+
+Keep only copied/used references with original Wikipedia numbers:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_hybrid.py --url "https://en.wikipedia.org/wiki/Large_language_model" --references original
+```
+
+Keep only copied/used references, sort them by original number, and renumber from 1:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_hybrid.py --url "https://en.wikipedia.org/wiki/Large_language_model" --references smart
 ```
 
 ## Different Languages

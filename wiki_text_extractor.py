@@ -58,6 +58,10 @@ MERGED_WORD_LATEX_SYMBOL_PATTERN = re.compile(r"\b([A-Za-z]{4,})([A-Za-z])\s+\$\
 INLINE_DUPLICATE_LATEX_FUNCTION_PATTERN = re.compile(r"\b([A-Za-z]\([^$\n]+?\))\s+\$\1\$")
 GREEK_LETTER_PATTERN = re.compile(r"[\u0370-\u03ff]")
 RENDERED_MATH_FUNCTION_PATTERN = re.compile(r"\b(?:Pr|log|sin|cos|tan|exp|token)\s*\(")
+SENTENCE_CONTINUATION_ABBREVIATION_PATTERN = re.compile(
+    r"\b(?:al|e\.g|i\.e|etc|vs|fig|no|vol|pp)\.$",
+    re.IGNORECASE,
+)
 LANGUAGE_FOLDER_NAMES = {
     "bn": "Bangla",
     "en": "English",
@@ -1468,6 +1472,11 @@ def sentence_spans(text: str) -> list[TextSentence]:
             continue
         if len(normalize_for_match(sentence)) < 8:
             continue
+        if sentences and SENTENCE_CONTINUATION_ABBREVIATION_PATTERN.search(sentences[-1].text):
+            previous = sentences.pop()
+            joined = re.sub(r"\s+", " ", text[previous.start : match.end()]).strip()
+            sentences.append(TextSentence(joined, previous.start, match.end()))
+            continue
         sentences.append(TextSentence(sentence, match.start(), match.end()))
     return sentences
 
@@ -1773,6 +1782,7 @@ def extract_partial_hybrid_text(
     confidence = "medium"
     first_heading = matched_headings[0] if matched_headings else None
     last_heading = matched_headings[-1] if matched_headings else None
+    start_anchor_locked = False
     if matched_headings:
         coarse_start = first_heading.start
         coarse_end = last_heading.end
@@ -1800,6 +1810,7 @@ def extract_partial_hybrid_text(
             if start_candidates:
                 citation_start = clean_index.sentences[start_candidates[0][0].sentence_index].start
                 coarse_start = min(coarse_start, citation_start) if matched_headings else citation_start
+                start_anchor_locked = True
                 report_lines.append(f"Start citation sequence: {', '.join(start_sequence)}")
             elif matched_headings:
                 report_lines.append("Start citation sequence ignored: all matches are below first heading.")
@@ -1830,10 +1841,11 @@ def extract_partial_hybrid_text(
         raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
 
     start_search_end = first_heading.start if first_heading is not None else coarse_end
+    start_search_begin = coarse_start if start_anchor_locked else max(0, coarse_start - 4000)
     start_match = find_sentence_window_match(
         copied_sentences,
         clean_index.sentences,
-        max(0, coarse_start - 4000),
+        start_search_begin,
         start_search_end,
         False,
         threshold,

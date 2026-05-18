@@ -700,6 +700,18 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual([chunk[:2] for chunk in chunks], [(0, 3), (3, 6), (5, 8)])
 
+    def test_sentence_spans_keeps_et_al_with_following_sentence(self):
+        # Verifies citation anchors do not start after common author abbreviations.
+        sentences = sentence_spans(
+            "Per Vake et al. (2025), contributions improved open-weight models.[23] "
+            "Next sentence follows."
+        )
+
+        self.assertEqual(
+            sentences[0].text,
+            "Per Vake et al. (2025), contributions improved open-weight models.[23]",
+        )
+
     def test_hybrid_extraction_uses_citations_and_sentence_windows(self):
         # Verifies refs-enabled copied text can extract a clean partial body range.
         clean = (
@@ -858,6 +870,32 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertTrue(result.text.startswith("== Evaluation =="))
         self.assertNotIn("Earlier unrelated article text", result.text)
         self.assertIn("Start sentence-window match failed; used structural fallback.", result.report)
+
+    def test_hybrid_start_keeps_author_abbreviation_before_citation(self):
+        # Verifies start citation boundaries include author text before an et al. abbreviation.
+        clean = (
+            "Previous paragraph should stay out.\n\n"
+            "Per Vake et al. (2025), community-driven contributions improve open-weight models.[23]\n\n"
+            "== Dataset preprocessing ==\n\n"
+            "Tokenization converts text into numbers.[24] "
+            "According to Yenni Jun, token counts depend on language.[25]\n\n"
+            "== Byte-pair encoding ==\n\n"
+            "Byte-pair encoding starts from characters."
+        )
+        copied = (
+            "Per Vake et al. (2025), community-driven contributions improve open-weight models.[23]\n\n"
+            "Dataset preprocessing\n"
+            "Tokenization\n"
+            "Tokenization converts text into numbers.[24] "
+            "According to Yenni Jun, token counts depend on language.[25]\n\n"
+            "Byte-pair encoding\n"
+            "Byte-pair encoding starts from characters."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.startswith("Per Vake et al. (2025)"))
+        self.assertNotIn("Previous paragraph should stay out.", result.text)
 
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.

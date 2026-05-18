@@ -20,6 +20,7 @@ from wiki_text_extractor import (
     partial_match_report_path,
     partial_output_path,
     normalize_copied_text_for_hybrid_sentences,
+    normalize_copied_math_for_hybrid,
     extract_partial_text,
     PartialExtractionError,
     required_partial_anchor_score,
@@ -955,6 +956,104 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertTrue(result.text.startswith("Dynamic quantization allows"))
         self.assertNotIn("Earlier context should stay out.", result.text)
         self.assertIn("Start partial sentence score:", result.report)
+
+    def test_copied_math_normalization_collapses_displaystyle_fragments(self):
+        # Verifies browser-copied displaystyle math is normalized before sentence splitting.
+        copied = (
+            "Let \n"
+            "x\n"
+            "{\\displaystyle x} be the number of parameter count, and \n"
+            "y\n"
+            "{\\displaystyle y} be the performance of the model.\n\n"
+            "When \n"
+            "y\n"
+            "=\n"
+            "average \n"
+            "Pr\n"
+            "(\n"
+            "correct token\n"
+            ")\n"
+            "{\\displaystyle y={\\text{average }}\\Pr({\\text{correct token}})}, then \n"
+            "(\n"
+            "log\n"
+            "x\n"
+            ",\n"
+            "y\n"
+            ")\n"
+            "{\\displaystyle (\\log x,y)} is an exponential curve."
+        )
+
+        normalized = normalize_copied_math_for_hybrid(copied)
+
+        self.assertIn("Let $x$ be the number", normalized)
+        self.assertIn("$y$ be the performance", normalized)
+        self.assertIn(
+            "When $y={\\mathrm{average }}\\Pr({\\mathrm{correct token}})$, then $(\\log x,y)$ is an exponential curve.",
+            normalized,
+        )
+        self.assertNotIn("\nx\n", normalized)
+        self.assertNotIn("\naverage\n", normalized)
+
+    def test_hybrid_math_heavy_partial_matches_clean_latex_text(self):
+        # Verifies copied displaystyle math can still match clean LaTeX hybrid output.
+        clean = (
+            "Before text.\n\n"
+            "The authors considered a toy model, and showed that this model applies to these tasks as well.[88]\n\n"
+            "Let $x$ be the number of parameter count, and $y$ be the performance of the model. "
+            "$(\\log x,y)$ is an exponential curve before it hits the plateau. "
+            "$(\\log x,y)$ plot is a straight line before it hits zero.\n\n"
+            "== Interpretation ==\n\n"
+            "After text."
+        )
+        copied = (
+            "types of tasks, applies to these tasks as well.[88]\n\n"
+            "Let \n"
+            "x\n"
+            "{\\displaystyle x} be the number of parameter count, and \n"
+            "y\n"
+            "{\\displaystyle y} be the performance of the model.\n\n"
+            "When \n"
+            "y\n"
+            "=\n"
+            "average \n"
+            "Pr\n"
+            "(\n"
+            "correct token\n"
+            ")\n"
+            "{\\displaystyle y={\\text{average }}\\Pr({\\text{correct token}})}, then \n"
+            "(\n"
+            "log\n"
+            "x\n"
+            ",\n"
+            "y\n"
+            ")\n"
+            "{\\displaystyle (\\log x,y)} is an exponential curve before it hits the plateau.\n"
+            "When \n"
+            "y\n"
+            "=\n"
+            "average \n"
+            "log\n"
+            "(\n"
+            "Pr\n"
+            "(\n"
+            "correct token\n"
+            ")\n"
+            ")\n"
+            "{\\displaystyle y={\\text{average }}\\log(\\Pr({\\text{correct token}}))}, then the \n"
+            "(\n"
+            "log\n"
+            "x\n"
+            ",\n"
+            "y\n"
+            ")\n"
+            "{\\displaystyle (\\log x,y)} plot is a straight line before it hits zero."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("Let $x$ be the number", result.text)
+        self.assertIn("$(\\log x,y)$ plot is a straight line", result.text)
+        self.assertNotIn("Before text.", result.text)
 
     def test_hybrid_short_start_boundary_uses_two_sentence_fallback(self):
         # Verifies short copied pre-heading starts can match with 2 sentences inside a 12-sentence cap.

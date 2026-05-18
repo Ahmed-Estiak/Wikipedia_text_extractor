@@ -1149,6 +1149,88 @@ def normalize_math_for_match(text: str) -> str:
     return text
 
 
+def line_looks_like_copied_rendered_math_word(line: str) -> bool:
+    # Detects word-only rendered math fragments near copied displaystyle blocks.
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if not re.fullmatch(r"[A-Za-z ]+", stripped):
+        return False
+    if stripped != stripped.casefold():
+        return False
+    return len(stripped) <= 60
+
+
+def clean_copied_latex_context_segment(segment: str) -> str:
+    # Keeps prose context while dropping rendered fallback lines before displaystyle math.
+    kept: list[str] = []
+    for line in segment.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if line_looks_like_rendered_math(stripped):
+            continue
+        if line_looks_like_copied_rendered_math_word(stripped):
+            continue
+        kept.append(stripped)
+    return " ".join(kept)
+
+
+def replace_copied_displaystyle_latex(text: str) -> str:
+    # Converts copied MediaWiki displaystyle math into inline LaTeX before sentence splitting.
+    marker = r"{\displaystyle"
+    parts: list[str] = []
+    start = 0
+    while True:
+        marker_index = text.find(marker, start)
+        if marker_index == -1:
+            parts.append(text[start:])
+            break
+
+        context = clean_copied_latex_context_segment(text[start:marker_index])
+        if context:
+            parts.append(context)
+            parts.append(" ")
+
+        depth = 0
+        end_index = None
+        for index in range(marker_index, len(text)):
+            char = text[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end_index = index
+                    break
+        if end_index is None:
+            parts.append(text[marker_index:])
+            break
+
+        latex = text[marker_index + len(marker) : end_index]
+        parts.append(f"${normalize_latex(latex)}$")
+        parts.append(" ")
+        start = end_index + 1
+
+    text = "".join(parts)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def normalize_copied_math_for_hybrid(text: str) -> str:
+    # Normalizes pasted Wikipedia math before hybrid sentence detection.
+    text = CITATION_NEEDED_PATTERN.sub("", text)
+    if r"{\displaystyle" in text:
+        text = replace_copied_displaystyle_latex(text)
+        text = join_inline_latex_lines(text)
+        text = remove_inline_duplicate_latex_symbols(text)
+    return text
+
+
 def normalize_match_index_map(text: str) -> tuple[str, list[int]]:
     # Normalizes text while keeping a map back to original character offsets.
     normalized: list[str] = []
@@ -1648,12 +1730,15 @@ def hybrid_window_score(left: str, right: str) -> float:
 
 
 def sentence_window_chunks(
-    sentences: list[TextSentence], reverse: bool = False, window_size: int = 3
+    sentences: list[TextSentence],
+    reverse: bool = False,
+    window_size: int = 3,
+    step: int = 3,
 ) -> list[tuple[int, int, str]]:
     # Builds copied sentence chunks with step 3 and a final backfilled chunk.
     if window_size < 1 or len(sentences) < window_size:
         return []
-    starts = list(range(0, len(sentences) - window_size + 1, 3))
+    starts = list(range(0, len(sentences) - window_size + 1, max(1, step)))
     final_start = max(0, len(sentences) - window_size)
     if final_start not in starts:
         starts.append(final_start)
@@ -1677,6 +1762,7 @@ def find_sentence_window_match(
     reverse: bool = False,
     threshold: float = 0.84,
     window_size: int = 3,
+    copied_step: int = 3,
 ) -> tuple[int, int, int, int, float] | None:
     # Finds the first copied sentence chunk that has a strong clean sliding-window match.
     clean_indexes = [
@@ -1692,7 +1778,7 @@ def find_sentence_window_match(
     if reverse:
         clean_window_starts = list(reversed(clean_window_starts))
     for _copied_start, _copied_end, copied_text in sentence_window_chunks(
-        copied_sentences, reverse, window_size
+        copied_sentences, reverse, window_size, copied_step
     ):
         best: tuple[int, int, int, int, float] | None = None
         for clean_index in clean_window_starts:
@@ -1745,6 +1831,7 @@ def find_sentence_window_match_with_short_fallback(
         reverse,
         threshold,
         window_size=3,
+        copied_step=3,
     )
     if match is not None or not allow_short_fallback or len(copied_sentences) >= 7:
         return match
@@ -1752,7 +1839,7 @@ def find_sentence_window_match_with_short_fallback(
         clean_sentences,
         clean_start,
         clean_end,
-        reverse,
+        False,
         max_sentences=12,
     )
     for window_size, fallback_threshold in ((2, max(threshold, 0.89)), (1, max(threshold, 0.94))):
@@ -1764,6 +1851,7 @@ def find_sentence_window_match_with_short_fallback(
             reverse,
             fallback_threshold,
             window_size=window_size,
+            copied_step=1,
         )
         if match is not None:
             return match
@@ -2009,7 +2097,7 @@ def normalize_copied_text_for_hybrid_sentences(
     copied_text: str, clean_headings: list[TextHeading]
 ) -> str:
     # Removes structural/noisy copied lines before sentence-window matching.
-    copied_text = CITATION_NEEDED_PATTERN.sub("", copied_text)
+    copied_text = normalize_copied_math_for_hybrid(copied_text)
     heading_titles = {normalize_for_match(heading.title) for heading in clean_headings}
     kept_lines: list[str] = []
     for line in copied_text.replace("\r\n", "\n").replace("\r", "\n").splitlines():

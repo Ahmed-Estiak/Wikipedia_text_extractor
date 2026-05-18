@@ -993,6 +993,34 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Tokenization also compresses the datasets.", result.text)
         self.assertNotIn("Because LLMs generally require arrays", result.text)
 
+    def test_hybrid_end_refine_does_not_resync_beyond_fifteen_sentences(self):
+        # Verifies ordered refine cannot jump too far after copied-only noisy rows.
+        filler = " ".join(
+            f"Filler sentence {index} keeps the distant target outside the cap."
+            for index in range(1, 17)
+        )
+        clean = (
+            "== Tokenization ==\n\n"
+            "Anchor sentence one identifies the selected section. "
+            "Anchor sentence two keeps the main window stable. "
+            "Anchor sentence three completes the matched window. "
+            f"{filler} "
+            "Distant target sentence should not be reached."
+        )
+        copied = (
+            "Tokenization\n"
+            "Anchor sentence one identifies the selected section. "
+            "Anchor sentence two keeps the main window stable. "
+            "Anchor sentence three completes the matched window.\n\n"
+            "copied only table row with shifted columns\n"
+            "Distant target sentence should not be reached."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("Anchor sentence three completes the matched window.", result.text)
+        self.assertNotIn("Distant target sentence should not be reached.", result.text)
+
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.
         self.assertEqual(lower_alpha_label(1), "a")

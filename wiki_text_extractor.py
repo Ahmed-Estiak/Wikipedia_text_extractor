@@ -1739,8 +1739,9 @@ def refine_sentence_start(
     threshold: float = 0.88,
     clean_min: int | None = None,
     clean_max: int | None = None,
+    max_search_sentences: int = 15,
 ) -> int:
-    # Expands a start anchor backward with ordered fuzzy sentence search until two failures.
+    # Expands a start anchor backward inside rolling clean sentence windows until two failures.
     copied_index = copied_anchor_start - 1
     before_clean_index = clean_anchor_start
     failures = 0
@@ -1752,11 +1753,13 @@ def refine_sentence_start(
             if (clean_min is None or clean_sentences[index].start >= clean_min)
             and (clean_max is None or clean_sentences[index].end <= clean_max)
         ]
+        candidates = candidates[-max_search_sentences:]
         match = best_ordered_sentence_match(
             copied_sentences[copied_index].text,
             clean_sentences,
             candidates,
             threshold,
+            tie_preference="last",
         )
         if match is not None:
             start_index = match[0]
@@ -1776,8 +1779,9 @@ def refine_sentence_end(
     threshold: float = 0.88,
     clean_min: int | None = None,
     clean_max: int | None = None,
+    max_search_sentences: int = 15,
 ) -> int:
-    # Expands an end anchor forward with ordered fuzzy sentence search until two failures.
+    # Expands an end anchor forward inside rolling clean sentence windows until two failures.
     copied_index = copied_anchor_end
     after_clean_index = clean_anchor_end
     failures = 0
@@ -1789,11 +1793,13 @@ def refine_sentence_end(
             if (clean_min is None or clean_sentences[index].start >= clean_min)
             and (clean_max is None or clean_sentences[index].end <= clean_max)
         ]
+        candidates = candidates[:max_search_sentences]
         match = best_ordered_sentence_match(
             copied_sentences[copied_index].text,
             clean_sentences,
             candidates,
             threshold,
+            tie_preference="first",
         )
         if match is not None:
             after_clean_index = match[0] + 1
@@ -1810,8 +1816,9 @@ def best_ordered_sentence_match(
     clean_sentences: list[TextSentence],
     candidate_indexes: list[int],
     threshold: float,
+    tie_preference: str = "first",
 ) -> tuple[int, float] | None:
-    # Finds the best clean sentence for one copied sentence; ties choose the earlier clean position.
+    # Finds the best clean sentence for one copied sentence with deterministic tie handling.
     best: tuple[int, float] | None = None
     for index in candidate_indexes:
         clean_text = clean_sentences[index].text
@@ -1820,7 +1827,12 @@ def best_ordered_sentence_match(
         score = hybrid_window_score(copied_sentence, clean_text)
         if score < threshold:
             continue
-        if best is None or score > best[1] or (score == best[1] and index < best[0]):
+        if best is None or score > best[1]:
+            best = (index, score)
+        elif score == best[1] and (
+            (tie_preference == "first" and index < best[0])
+            or (tie_preference == "last" and index > best[0])
+        ):
             best = (index, score)
     return best
 

@@ -734,6 +734,19 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         )
         self.assertEqual(sentences[1].text, "Another sentence follows.")
 
+    def test_sentence_spans_keeps_decimal_numbers_inside_sentence(self):
+        # Verifies decimal numbers do not split sentence matching units.
+        sentences = sentence_spans(
+            "The score improved from 0.58 to 1.34 in evaluation. Another sentence follows."
+        )
+
+        self.assertEqual(len(sentences), 2)
+        self.assertEqual(
+            sentences[0].text,
+            "The score improved from 0.58 to 1.34 in evaluation.",
+        )
+        self.assertEqual(sentences[1].text, "Another sentence follows.")
+
     def test_hybrid_extraction_uses_citations_and_sentence_windows(self):
         # Verifies refs-enabled copied text can extract a clean partial body range.
         clean = (

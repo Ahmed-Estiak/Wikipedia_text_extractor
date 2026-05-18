@@ -1465,22 +1465,60 @@ def extract_partial_text(
 
 def sentence_spans(text: str) -> list[TextSentence]:
     # Splits text into sentence-like units while preserving offsets for slicing.
-    citation_tail = r"(?:\s*\[\d+(?:\s*[,\u2013-]\s*\d+)*\])*"
-    pattern = re.compile(rf"[^.!?\n]+(?:[.!?]+{citation_tail}[\"')\]]*)?", re.MULTILINE)
     sentences: list[TextSentence] = []
-    for match in pattern.finditer(text):
-        sentence = re.sub(r"\s+", " ", match.group(0)).strip()
+    start = 0
+    index = 0
+    length = len(text)
+    spans: list[tuple[int, int]] = []
+    while index < length:
+        char = text[index]
+        if char == "\n":
+            if start < index:
+                spans.append((start, index))
+            start = index + 1
+            index += 1
+            continue
+        if char in ".!?" and not is_decimal_point(text, index):
+            end = index + 1
+            while end < length and text[end] in "\"')]":
+                end += 1
+            citation_match = INLINE_REFERENCE_PATTERN.match(text, end)
+            while citation_match:
+                end = citation_match.end()
+                citation_match = INLINE_REFERENCE_PATTERN.match(text, end)
+            spans.append((start, end))
+            start = end
+            index = end
+            continue
+        index += 1
+    if start < length:
+        spans.append((start, length))
+
+    for span_start, span_end in spans:
+        raw_sentence = text[span_start:span_end]
+        sentence = re.sub(r"\s+", " ", raw_sentence).strip()
         if not sentence or SECTION_HEADING_PATTERN.match(sentence):
             continue
         if len(normalize_for_match(sentence)) < 8:
             continue
         if sentences and sentence_should_join_after_abbreviation(sentences[-1].text, sentence):
             previous = sentences.pop()
-            joined = re.sub(r"\s+", " ", text[previous.start : match.end()]).strip()
-            sentences.append(TextSentence(joined, previous.start, match.end()))
+            joined = re.sub(r"\s+", " ", text[previous.start : span_end]).strip()
+            sentences.append(TextSentence(joined, previous.start, span_end))
             continue
-        sentences.append(TextSentence(sentence, match.start(), match.end()))
+        sentences.append(TextSentence(sentence, span_start, span_end))
     return sentences
+
+
+def is_decimal_point(text: str, index: int) -> bool:
+    # Keeps numeric decimals such as 1.34 and 0.58 inside the same sentence.
+    return (
+        text[index] == "."
+        and index > 0
+        and index + 1 < len(text)
+        and text[index - 1].isdigit()
+        and text[index + 1].isdigit()
+    )
 
 
 def sentence_should_join_after_abbreviation(previous: str, current: str) -> bool:

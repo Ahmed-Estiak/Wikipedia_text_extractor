@@ -44,6 +44,7 @@ REMOVED_SECTION_IDS = {"See_also", "References", "External_links"}
 PLAIN_SECTION_TITLES = REMOVED_SECTION_TITLES | {"note", "notes"}
 SECTION_HEADING_PATTERN = re.compile(r"^\s*(=+)\s*(.*?)\s*\1\s*$")
 INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
+CITATION_NEEDED_PATTERN = re.compile(r"\[\s*citation needed\s*\]", re.IGNORECASE)
 LEADING_CARET_MARKER_PATTERN = re.compile(r"^[ \t]*(?:\^(?:[ \t]*[a-zA-Z0-9]+)?[ \t]*)+")
 MATH_FRAGMENT_PATTERN = re.compile(r"^[\sA-Za-z0-9+\-–−=∝×*/^().,{}\\]+$")
 MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
@@ -1837,6 +1838,107 @@ def best_ordered_sentence_match(
     return best
 
 
+def ordered_tokens(text: str) -> list[str]:
+    # Keeps normalized token order for directional partial boundary matching.
+    return re.findall(r"[a-z0-9]+", normalize_for_match(CITATION_NEEDED_PATTERN.sub("", text)))
+
+
+def partial_boundary_score(copied_fragment: str, clean_sentence: str, side: str) -> float:
+    # Scores a boundary fragment against directional windows from one clean sentence.
+    copied_normalized = normalize_for_match(CITATION_NEEDED_PATTERN.sub("", copied_fragment))
+    if len(copied_normalized) < 40:
+        return 0.0
+    copied_tokens = ordered_tokens(copied_fragment)
+    clean_tokens = ordered_tokens(clean_sentence)
+    if not copied_tokens or not clean_tokens:
+        return 0.0
+    copied_count = len(copied_tokens)
+    min_size = max(1, int(copied_count * 0.80))
+    max_size = min(len(clean_tokens), max(min_size, int(copied_count * 1.30) + 1))
+    if min_size > len(clean_tokens):
+        return 0.0
+
+    windows: list[list[str]] = []
+    for size in range(min_size, max_size + 1):
+        if side == "start":
+            latest_start = len(clean_tokens) - size
+            earliest_start = max(0, int(len(clean_tokens) * 0.35) - size)
+            starts = range(max(0, earliest_start), latest_start + 1)
+        else:
+            latest_start = min(len(clean_tokens) - size, int(len(clean_tokens) * 0.65))
+            starts = range(0, latest_start + 1)
+        windows.extend(clean_tokens[start : start + size] for start in starts)
+
+    best = 0.0
+    for window_tokens in windows:
+        window_text = " ".join(window_tokens)
+        token_score = token_overlap_score(" ".join(copied_tokens), window_text)
+        if token_score < 0.60:
+            continue
+        char_score = fuzzy_ratio(copied_normalized, window_text)
+        score = 0.55 * token_score + 0.45 * char_score
+        best = max(best, score)
+    return best
+
+
+def resolve_partial_start_boundary(
+    copied_sentences: list[TextSentence],
+    clean_sentences: list[TextSentence],
+    clean_end: int,
+    current_start: int,
+    clean_min: int | None = None,
+    max_search_sentences: int = 15,
+    threshold: float = 0.85,
+) -> tuple[int, float] | None:
+    # Finds a clean full sentence when the copied first sentence starts mid-sentence.
+    if not copied_sentences:
+        return None
+    candidates = [
+        index
+        for index, sentence in enumerate(clean_sentences)
+        if sentence.end <= clean_end
+        and sentence.start < current_start
+        and (clean_min is None or sentence.start >= clean_min)
+    ][-max_search_sentences:]
+    best: tuple[int, float] | None = None
+    for index in candidates:
+        score = partial_boundary_score(copied_sentences[0].text, clean_sentences[index].text, "start")
+        if score >= threshold and (best is None or score > best[1] or (score == best[1] and index > best[0])):
+            best = (index, score)
+    if best is None:
+        return None
+    return clean_sentences[best[0]].start, best[1]
+
+
+def resolve_partial_end_boundary(
+    copied_sentences: list[TextSentence],
+    clean_sentences: list[TextSentence],
+    clean_start: int,
+    current_end: int,
+    clean_max: int | None = None,
+    max_search_sentences: int = 15,
+    threshold: float = 0.85,
+) -> tuple[int, float] | None:
+    # Finds a clean full sentence when the copied last sentence ends mid-sentence.
+    if not copied_sentences:
+        return None
+    candidates = [
+        index
+        for index, sentence in enumerate(clean_sentences)
+        if sentence.start >= clean_start
+        and sentence.end > current_end
+        and (clean_max is None or sentence.end <= clean_max)
+    ][:max_search_sentences]
+    best: tuple[int, float] | None = None
+    for index in candidates:
+        score = partial_boundary_score(copied_sentences[-1].text, clean_sentences[index].text, "end")
+        if score >= threshold and (best is None or score > best[1] or (score == best[1] and index < best[0])):
+            best = (index, score)
+    if best is None:
+        return None
+    return clean_sentences[best[0]].end, best[1]
+
+
 def heading_position_matches(
     copied_headings: list[TextHeading], clean_headings: list[TextHeading]
 ) -> list[TextHeading]:
@@ -1869,6 +1971,7 @@ def normalize_copied_text_for_hybrid_sentences(
     copied_text: str, clean_headings: list[TextHeading]
 ) -> str:
     # Removes structural/noisy copied lines before sentence-window matching.
+    copied_text = CITATION_NEEDED_PATTERN.sub("", copied_text)
     heading_titles = {normalize_for_match(heading.title) for heading in clean_headings}
     kept_lines: list[str] = []
     for line in copied_text.replace("\r\n", "\n").replace("\r", "\n").splitlines():
@@ -2011,6 +2114,18 @@ def extract_partial_hybrid_text(
         confidence = "low"
         report_lines.append("Start sentence-window match failed; used structural fallback.")
 
+    partial_start = resolve_partial_start_boundary(
+        start_copied_sentences,
+        clean_index.sentences,
+        start_search_end,
+        start,
+    )
+    if partial_start is not None:
+        start = partial_start[0]
+        if confidence == "low":
+            confidence = "medium"
+        report_lines.append(f"Start partial sentence score: {partial_start[1]:.3f}")
+
     end_search_start = last_heading.end if last_heading is not None else start
     end_search_limit = (
         next_heading_start(clean_index.headings, last_heading, min(len(clean_text), coarse_end + 4000))
@@ -2059,6 +2174,20 @@ def extract_partial_hybrid_text(
         end = coarse_end
         confidence = "low"
         report_lines.append("End sentence-window match failed; used structural fallback.")
+
+    if not copied_has_references_heading:
+        partial_end = resolve_partial_end_boundary(
+            end_copied_sentences,
+            clean_index.sentences,
+            end_search_start,
+            end,
+            clean_max=end_search_limit,
+        )
+        if partial_end is not None:
+            end = partial_end[0]
+            if confidence == "low":
+                confidence = "medium"
+            report_lines.append(f"End partial sentence score: {partial_end[1]:.3f}")
 
     if start >= end:
         message = "failed: hybrid boundaries are invalid"

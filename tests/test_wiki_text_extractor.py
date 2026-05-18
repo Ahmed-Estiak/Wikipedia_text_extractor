@@ -919,6 +919,30 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertTrue(result.text.startswith("Per Vake et al. (2025)"))
         self.assertNotIn("Previous paragraph should stay out.", result.text)
 
+    def test_hybrid_start_partial_sentence_matches_clean_tail_window(self):
+        # Verifies a copied first sentence can start in the middle of a clean full sentence.
+        clean = (
+            "Earlier context should stay out.\n\n"
+            "Dynamic quantization allows for the use of a different quantization codebook per layer, "
+            "either a lookup table of values or a linear mapping at the cost of lower precision.\n\n"
+            "It is possible to fine-tune quantized models using low-rank adaptation.[42]\n\n"
+            "== Extensibility ==\n\n"
+            "Beyond basic text generation, tools extend LLM capabilities."
+        )
+        copied = (
+            "quantization codebook per layer, either a lookup table of values or a linear mapping "
+            "at the cost of lower precision.[citation needed]\n\n"
+            "It is possible to fine-tune quantized models using low-rank adaptation.[42]\n\n"
+            "Extensibility\n"
+            "Beyond basic text generation, tools extend LLM capabilities."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.startswith("Dynamic quantization allows"))
+        self.assertNotIn("Earlier context should stay out.", result.text)
+        self.assertIn("Start partial sentence score:", result.report)
+
     def test_hybrid_short_start_boundary_uses_two_sentence_fallback(self):
         # Verifies short copied pre-heading starts can match with 2 sentences inside a 12-sentence cap.
         clean = (
@@ -959,6 +983,27 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("The final selected sentence has unique boundary wording.", result.text)
         self.assertNotIn("Outside next section", result.text)
         self.assertIn("End copied sentence range: after last matched heading.", result.report)
+
+    def test_hybrid_end_partial_sentence_matches_clean_head_window(self):
+        # Verifies a copied last sentence can stop in the beginning of a clean full sentence.
+        clean = (
+            "== Retrieval-augmented generation ==\n\n"
+            "Retrieval-augmented generation integrates language models with document retrieval systems. "
+            "The retrieved documents are added to the prompt so the model can ground its answer."
+        )
+        copied = (
+            "Retrieval-augmented generation\n"
+            "Retrieval-augmented generation integrates language models with document retrieval systems. "
+            "The retrieved documents are added to the prompt"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("so the model can ground its answer.", result.text)
+        self.assertTrue(
+            "End partial sentence score:" in result.report
+            or "End sentence-window score:" in result.report
+        )
 
     def test_hybrid_end_refine_skips_copied_table_row_and_resyncs(self):
         # Verifies ordered refine can skip copied-only table/code rows and match the next sentence.

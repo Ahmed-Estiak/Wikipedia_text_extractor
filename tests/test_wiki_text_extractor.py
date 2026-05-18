@@ -712,6 +712,28 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "Per Vake et al. (2025), contributions improved open-weight models.[23]",
         )
 
+    def test_sentence_spans_keeps_etc_as_sentence_end_before_uppercase(self):
+        # Verifies context-sensitive abbreviations can still end a sentence.
+        sentences = sentence_spans(
+            "It includes images, audio, etc. The next section explains tokenization."
+        )
+
+        self.assertEqual(len(sentences), 2)
+        self.assertEqual(sentences[0].text, "It includes images, audio, etc.")
+        self.assertEqual(sentences[1].text, "The next section explains tokenization.")
+
+    def test_sentence_spans_joins_context_abbreviation_before_lowercase(self):
+        # Verifies context-sensitive abbreviations join when the next fragment continues lowercase.
+        sentences = sentence_spans(
+            "The model compares fig. 2 with the baseline result. Another sentence follows."
+        )
+
+        self.assertEqual(
+            sentences[0].text,
+            "The model compares fig. 2 with the baseline result.",
+        )
+        self.assertEqual(sentences[1].text, "Another sentence follows.")
+
     def test_hybrid_extraction_uses_citations_and_sentence_windows(self):
         # Verifies refs-enabled copied text can extract a clean partial body range.
         clean = (

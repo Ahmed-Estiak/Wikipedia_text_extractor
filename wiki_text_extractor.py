@@ -58,8 +58,9 @@ MERGED_WORD_LATEX_SYMBOL_PATTERN = re.compile(r"\b([A-Za-z]{4,})([A-Za-z])\s+\$\
 INLINE_DUPLICATE_LATEX_FUNCTION_PATTERN = re.compile(r"\b([A-Za-z]\([^$\n]+?\))\s+\$\1\$")
 GREEK_LETTER_PATTERN = re.compile(r"[\u0370-\u03ff]")
 RENDERED_MATH_FUNCTION_PATTERN = re.compile(r"\b(?:Pr|log|sin|cos|tan|exp|token)\s*\(")
-SENTENCE_CONTINUATION_ABBREVIATION_PATTERN = re.compile(
-    r"\b(?:al|e\.g|i\.e|etc|vs|fig|no|vol|pp)\.$",
+STRONG_CONTINUATION_ABBREVIATION_PATTERN = re.compile(r"\b(?:al|e\.g|i\.e)\.$", re.IGNORECASE)
+CONTEXT_CONTINUATION_ABBREVIATION_PATTERN = re.compile(
+    r"\b(?:etc|vs|fig|no|vol|pp)\.$",
     re.IGNORECASE,
 )
 LANGUAGE_FOLDER_NAMES = {
@@ -1472,13 +1473,24 @@ def sentence_spans(text: str) -> list[TextSentence]:
             continue
         if len(normalize_for_match(sentence)) < 8:
             continue
-        if sentences and SENTENCE_CONTINUATION_ABBREVIATION_PATTERN.search(sentences[-1].text):
+        if sentences and sentence_should_join_after_abbreviation(sentences[-1].text, sentence):
             previous = sentences.pop()
             joined = re.sub(r"\s+", " ", text[previous.start : match.end()]).strip()
             sentences.append(TextSentence(joined, previous.start, match.end()))
             continue
         sentences.append(TextSentence(sentence, match.start(), match.end()))
     return sentences
+
+
+def sentence_should_join_after_abbreviation(previous: str, current: str) -> bool:
+    # Decides whether an abbreviation period is a true sentence break or continuation.
+    previous = previous.strip()
+    current = current.strip()
+    if STRONG_CONTINUATION_ABBREVIATION_PATTERN.search(previous):
+        return True
+    if not CONTEXT_CONTINUATION_ABBREVIATION_PATTERN.search(previous) or not current:
+        return False
+    return current[0].islower() or current[0].isdigit() or current.startswith(("(", "[", "{", ",", ";", ":"))
 
 
 def extract_heading_spans(text: str) -> list[TextHeading]:

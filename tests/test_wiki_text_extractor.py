@@ -897,6 +897,47 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertTrue(result.text.startswith("Per Vake et al. (2025)"))
         self.assertNotIn("Previous paragraph should stay out.", result.text)
 
+    def test_hybrid_short_start_boundary_uses_two_sentence_fallback(self):
+        # Verifies short copied pre-heading starts can match with 2 sentences inside a 12-sentence cap.
+        clean = (
+            "Outside sentence one should stay out. Outside sentence two should stay out.\n\n"
+            "The first selected sentence has distinctive wording. "
+            "The second selected sentence confirms the boundary.\n\n"
+            "== Target heading ==\n\n"
+            "Target body continues after the heading."
+        )
+        copied = (
+            "The first selected sentence has distinctive wording. "
+            "The second selected sentence confirms the boundary.\n\n"
+            "Target heading\n"
+            "Target body continues after the heading."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.startswith("The first selected sentence"))
+        self.assertNotIn("Outside sentence one", result.text)
+        self.assertIn("Start copied sentence range: before first matched heading.", result.report)
+
+    def test_hybrid_short_end_boundary_uses_one_sentence_fallback(self):
+        # Verifies short copied post-heading tails can match with one sentence below the last heading.
+        clean = (
+            "== Target heading ==\n\n"
+            "The final selected sentence has unique boundary wording.\n\n"
+            "== Next heading ==\n\n"
+            "Outside next section should stay out."
+        )
+        copied = (
+            "Target heading\n"
+            "The final selected sentence has unique boundary wording."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("The final selected sentence has unique boundary wording.", result.text)
+        self.assertNotIn("Outside next section", result.text)
+        self.assertIn("End copied sentence range: after last matched heading.", result.report)
+
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.
         self.assertEqual(lower_alpha_label(1), "a")

@@ -1625,17 +1625,17 @@ def find_sentence_window_match(
     clean_end: int,
     reverse: bool = False,
     threshold: float = 0.84,
+    window_size: int = 3,
 ) -> tuple[int, int, int, int, float] | None:
-    # Finds the first copied 3-sentence chunk that has a strong clean sliding-window match.
+    # Finds the first copied sentence chunk that has a strong clean sliding-window match.
     clean_indexes = [
         index
         for index, sentence in enumerate(clean_sentences)
         if sentence.start >= clean_start and sentence.end <= clean_end
     ]
-    if not clean_indexes:
+    if not clean_indexes or window_size < 1:
         return None
-    window_size = 3 if len(clean_indexes) >= 3 else len(clean_indexes)
-    if len(copied_sentences) < window_size:
+    if len(clean_indexes) < window_size or len(copied_sentences) < window_size:
         return None
     clean_window_starts = clean_indexes[: len(clean_indexes) - window_size + 1]
     if reverse:
@@ -1654,6 +1654,68 @@ def find_sentence_window_match(
                 best = (_copied_start, _copied_end, clean_index, clean_index + window_size, score)
         if best is not None:
             return best
+    return None
+
+
+def capped_sentence_char_range(
+    clean_sentences: list[TextSentence],
+    clean_start: int,
+    clean_end: int,
+    reverse: bool = False,
+    max_sentences: int = 12,
+) -> tuple[int, int]:
+    # Caps a fallback search range to the nearest clean sentences at the boundary side.
+    indexes = [
+        index
+        for index, sentence in enumerate(clean_sentences)
+        if sentence.start >= clean_start and sentence.end <= clean_end
+    ]
+    if not indexes:
+        return clean_start, clean_end
+    selected = indexes[-max_sentences:] if reverse else indexes[:max_sentences]
+    return clean_sentences[selected[0]].start, clean_sentences[selected[-1]].end
+
+
+def find_sentence_window_match_with_short_fallback(
+    copied_sentences: list[TextSentence],
+    clean_sentences: list[TextSentence],
+    clean_start: int,
+    clean_end: int,
+    reverse: bool = False,
+    threshold: float = 0.84,
+    allow_short_fallback: bool = False,
+) -> tuple[int, int, int, int, float] | None:
+    # Tries the normal 3-sentence window, then 2/1 only for short boundary sides.
+    match = find_sentence_window_match(
+        copied_sentences,
+        clean_sentences,
+        clean_start,
+        clean_end,
+        reverse,
+        threshold,
+        window_size=3,
+    )
+    if match is not None or not allow_short_fallback or len(copied_sentences) >= 7:
+        return match
+    capped_start, capped_end = capped_sentence_char_range(
+        clean_sentences,
+        clean_start,
+        clean_end,
+        reverse,
+        max_sentences=12,
+    )
+    for window_size, fallback_threshold in ((2, max(threshold, 0.89)), (1, max(threshold, 0.94))):
+        match = find_sentence_window_match(
+            copied_sentences,
+            clean_sentences,
+            capped_start,
+            capped_end,
+            reverse,
+            fallback_threshold,
+            window_size=window_size,
+        )
+        if match is not None:
+            return match
     return None
 
 
@@ -1840,20 +1902,32 @@ def extract_partial_hybrid_text(
         message = "failed: no usable copied sentences found"
         raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
 
+    start_copied_sentences = copied_sentences
+    if first_heading is not None and copied_headings:
+        copied_head = copied_text[: copied_headings[0].start]
+        copied_head_clean = normalize_copied_text_for_hybrid_sentences(
+            copied_head, clean_index.headings
+        )
+        head_sentences = sentence_spans(copied_head_clean)
+        if head_sentences:
+            start_copied_sentences = head_sentences
+            report_lines.append("Start copied sentence range: before first matched heading.")
+
     start_search_end = first_heading.start if first_heading is not None else coarse_end
     start_search_begin = coarse_start if start_anchor_locked else max(0, coarse_start - 4000)
-    start_match = find_sentence_window_match(
-        copied_sentences,
+    start_match = find_sentence_window_match_with_short_fallback(
+        start_copied_sentences,
         clean_index.sentences,
         start_search_begin,
         start_search_end,
         False,
         threshold,
+        allow_short_fallback=len(start_copied_sentences) < 7,
     )
 
     if start_match:
         clean_start_index = refine_sentence_start(
-            copied_sentences,
+            start_copied_sentences,
             clean_index.sentences,
             start_match[0],
             start_match[2],
@@ -1885,13 +1959,14 @@ def extract_partial_hybrid_text(
     end_match = (
         None
         if copied_has_references_heading
-        else find_sentence_window_match(
+        else find_sentence_window_match_with_short_fallback(
             end_copied_sentences,
             clean_index.sentences,
             end_search_start,
             end_search_limit,
             True,
             threshold,
+            allow_short_fallback=len(end_copied_sentences) < 7,
         )
     )
 

@@ -1117,6 +1117,34 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             or "End sentence-window score:" in result.report
         )
 
+    def test_hybrid_strips_copied_maintenance_markers_before_matching(self):
+        # Verifies copied maintenance markers do not become sentences or extend the boundary.
+        clean = (
+            "According to a study, AI models consume on average 0.002 to 0.007 Wh per prompt. "
+            "Text generation requires around 0.05 Wh per prompt. "
+            "The least efficient image generation model used 11.49 Wh per image.[167]\n\n"
+            "== Denial of service due to scraping ==\n\n"
+            "Web scraping is used to gather training data for LLMs."
+        )
+        copied = (
+            "AI models consume on average 0.002 to 0.007 Wh per prompt. "
+            "Text generation requires around 0.05 Wh per prompt.[clarification needed]\n"
+            "[better source needed]\n"
+            "The least efficient image generation model used 11.49 Wh per image.[167]"
+            "[dubious \u2013 discuss]"
+        )
+
+        normalized = normalize_copied_text_for_hybrid_sentences(copied, [])
+        sentences = sentence_spans(normalized)
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertEqual(len(sentences), 3)
+        self.assertNotIn("better source needed", normalized.casefold())
+        self.assertNotIn("clarification needed", normalized.casefold())
+        self.assertNotIn("dubious", normalized.casefold())
+        self.assertNotIn("== Denial of service due to scraping ==", result.text)
+        self.assertNotIn("Web scraping is used", result.text)
+
     def test_hybrid_end_refine_skips_copied_table_row_and_resyncs(self):
         # Verifies ordered refine can skip copied-only table/code rows and match the next sentence.
         clean = (

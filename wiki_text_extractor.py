@@ -44,7 +44,10 @@ REMOVED_SECTION_IDS = {"See_also", "References", "External_links"}
 PLAIN_SECTION_TITLES = REMOVED_SECTION_TITLES | {"note", "notes"}
 SECTION_HEADING_PATTERN = re.compile(r"^\s*(=+)\s*(.*?)\s*\1\s*$")
 INLINE_REFERENCE_PATTERN = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
-CITATION_NEEDED_PATTERN = re.compile(r"\[\s*citation needed\s*\]", re.IGNORECASE)
+MAINTENANCE_MARKER_PATTERN = re.compile(
+    r"\[\s*(?:citation needed|better source needed|clarification needed|dubious\s*[\u2013\u2014-]\s*discuss)\s*\]",
+    re.IGNORECASE,
+)
 LEADING_CARET_MARKER_PATTERN = re.compile(r"^[ \t]*(?:\^(?:[ \t]*[a-zA-Z0-9]+)?[ \t]*)+")
 MATH_FRAGMENT_PATTERN = re.compile(r"^[\sA-Za-z0-9+\-–−=∝×*/^().,{}\\]+$")
 MATH_SYMBOL_PATTERN = re.compile(r"[+\-–−=∝×*/^{}\\]")
@@ -1223,7 +1226,7 @@ def replace_copied_displaystyle_latex(text: str) -> str:
 
 def normalize_copied_math_for_hybrid(text: str) -> str:
     # Normalizes pasted Wikipedia math before hybrid sentence detection.
-    text = CITATION_NEEDED_PATTERN.sub("", text)
+    text = MAINTENANCE_MARKER_PATTERN.sub("", text)
     if r"{\displaystyle" in text:
         text = replace_copied_displaystyle_latex(text)
         text = join_inline_latex_lines(text)
@@ -1966,12 +1969,12 @@ def best_ordered_sentence_match(
 
 def ordered_tokens(text: str) -> list[str]:
     # Keeps normalized token order for directional partial boundary matching.
-    return re.findall(r"[a-z0-9]+", normalize_for_match(CITATION_NEEDED_PATTERN.sub("", text)))
+    return re.findall(r"[a-z0-9]+", normalize_for_match(MAINTENANCE_MARKER_PATTERN.sub("", text)))
 
 
 def partial_boundary_score(copied_fragment: str, clean_sentence: str, side: str) -> float:
     # Scores a boundary fragment against directional windows from one clean sentence.
-    copied_normalized = normalize_for_match(CITATION_NEEDED_PATTERN.sub("", copied_fragment))
+    copied_normalized = normalize_for_match(MAINTENANCE_MARKER_PATTERN.sub("", copied_fragment))
     if len(copied_normalized) < 40:
         return 0.0
     copied_tokens = ordered_tokens(copied_fragment)

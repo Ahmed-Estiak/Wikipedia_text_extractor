@@ -960,6 +960,39 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("Outside next section", result.text)
         self.assertIn("End copied sentence range: after last matched heading.", result.report)
 
+    def test_hybrid_end_refine_skips_copied_table_row_and_resyncs(self):
+        # Verifies ordered refine can skip copied-only table/code rows and match the next sentence.
+        clean = (
+            "== Tokenization ==\n\n"
+            "As machine learning algorithms process numbers rather than text, the text must be converted to numbers. "
+            "In the first step, a vocabulary is decided upon. "
+            "Algorithms include byte-pair encoding and WordPiece. "
+            "There are also special tokens serving as control characters. "
+            "Also, some special symbols are used to denote special text formatting. "
+            "For example, GPT uses a marker for preceding whitespace.[24] "
+            "For example, the BPE tokenizer used by GPT-3 would split tokenizer: texts -> series of numerical \"tokens\" as\n\n"
+            "Tokenization also compresses the datasets. "
+            "Because LLMs generally require arrays, shorter texts may be padded."
+        )
+        copied = (
+            "Tokenization\n"
+            "As machine learning algorithms process numbers rather than text, the text must be converted to numbers. "
+            "In the first step, a vocabulary is decided upon. "
+            "Algorithms include byte-pair encoding and WordPiece. "
+            "There are also special tokens serving as control characters. "
+            "Also, some special symbols are used to denote special text formatting. "
+            "For example, GPT uses a marker for preceding whitespace.[24] "
+            "For example, the BPE tokenizer used by GPT-3 would split tokenizer: texts -> series of numerical \"tokens\" as\n\n"
+            "token izer : texts -> series of numerical \" t ok ens \"\n"
+            "Tokenization also compresses the datasets."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn('series of numerical "tokens" as', result.text)
+        self.assertIn("Tokenization also compresses the datasets.", result.text)
+        self.assertNotIn("Because LLMs generally require arrays", result.text)
+
     def test_lower_alpha_label_handles_multiple_letters(self):
         # Verifies lower-alpha label generation continues past z.
         self.assertEqual(lower_alpha_label(1), "a")

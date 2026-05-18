@@ -1737,21 +1737,34 @@ def refine_sentence_start(
     copied_anchor_start: int,
     clean_anchor_start: int,
     threshold: float = 0.88,
+    clean_min: int | None = None,
+    clean_max: int | None = None,
 ) -> int:
-    # Expands a confirmed start anchor backward one sentence at a time until two failures.
+    # Expands a start anchor backward with ordered fuzzy sentence search until two failures.
     copied_index = copied_anchor_start - 1
-    clean_index = clean_anchor_start - 1
+    before_clean_index = clean_anchor_start
     failures = 0
     start_index = clean_anchor_start
-    while copied_index >= 0 and clean_index >= 0 and failures < 2:
-        score = hybrid_window_score(copied_sentences[copied_index].text, clean_sentences[clean_index].text)
-        if score >= threshold:
-            start_index = clean_index
+    while copied_index >= 0 and before_clean_index > 0 and failures < 2:
+        candidates = [
+            index
+            for index in range(0, before_clean_index)
+            if (clean_min is None or clean_sentences[index].start >= clean_min)
+            and (clean_max is None or clean_sentences[index].end <= clean_max)
+        ]
+        match = best_ordered_sentence_match(
+            copied_sentences[copied_index].text,
+            clean_sentences,
+            candidates,
+            threshold,
+        )
+        if match is not None:
+            start_index = match[0]
+            before_clean_index = match[0]
             failures = 0
         else:
             failures += 1
         copied_index -= 1
-        clean_index -= 1
     return start_index
 
 
@@ -1761,22 +1774,55 @@ def refine_sentence_end(
     copied_anchor_end: int,
     clean_anchor_end: int,
     threshold: float = 0.88,
+    clean_min: int | None = None,
+    clean_max: int | None = None,
 ) -> int:
-    # Expands a confirmed end anchor forward one sentence at a time until two failures.
+    # Expands an end anchor forward with ordered fuzzy sentence search until two failures.
     copied_index = copied_anchor_end
-    clean_index = clean_anchor_end
+    after_clean_index = clean_anchor_end
     failures = 0
     end_index = clean_anchor_end
-    while copied_index < len(copied_sentences) and clean_index < len(clean_sentences) and failures < 2:
-        score = hybrid_window_score(copied_sentences[copied_index].text, clean_sentences[clean_index].text)
-        if score >= threshold:
-            end_index = clean_index + 1
+    while copied_index < len(copied_sentences) and after_clean_index < len(clean_sentences) and failures < 2:
+        candidates = [
+            index
+            for index in range(after_clean_index, len(clean_sentences))
+            if (clean_min is None or clean_sentences[index].start >= clean_min)
+            and (clean_max is None or clean_sentences[index].end <= clean_max)
+        ]
+        match = best_ordered_sentence_match(
+            copied_sentences[copied_index].text,
+            clean_sentences,
+            candidates,
+            threshold,
+        )
+        if match is not None:
+            after_clean_index = match[0] + 1
+            end_index = after_clean_index
             failures = 0
         else:
             failures += 1
         copied_index += 1
-        clean_index += 1
     return end_index
+
+
+def best_ordered_sentence_match(
+    copied_sentence: str,
+    clean_sentences: list[TextSentence],
+    candidate_indexes: list[int],
+    threshold: float,
+) -> tuple[int, float] | None:
+    # Finds the best clean sentence for one copied sentence; ties choose the earlier clean position.
+    best: tuple[int, float] | None = None
+    for index in candidate_indexes:
+        clean_text = clean_sentences[index].text
+        if token_overlap_score(copied_sentence, clean_text) < 0.30:
+            continue
+        score = hybrid_window_score(copied_sentence, clean_text)
+        if score < threshold:
+            continue
+        if best is None or score > best[1] or (score == best[1] and index < best[0]):
+            best = (index, score)
+    return best
 
 
 def heading_position_matches(
@@ -1943,6 +1989,8 @@ def extract_partial_hybrid_text(
             clean_index.sentences,
             start_match[0],
             start_match[2],
+            clean_min=start_search_begin,
+            clean_max=start_search_end,
         )
         start = clean_index.sentences[clean_start_index].start
         report_lines.append(f"Start sentence-window score: {start_match[4]:.3f}")
@@ -1990,6 +2038,8 @@ def extract_partial_hybrid_text(
             clean_index.sentences,
             end_match[1],
             end_match[3],
+            clean_min=end_search_start,
+            clean_max=end_search_limit,
         )
         end = clean_index.sentences[min(clean_end_index, len(clean_index.sentences)) - 1].end
         report_lines.append(f"End sentence-window score: {end_match[4]:.3f}")

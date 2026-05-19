@@ -1909,6 +1909,224 @@ def bounded_start_search_begin(
     return max(clean_sentences[start_index].start, max(0, anchor_start - max_chars))
 
 
+def nonempty_paragraph_spans(text: str) -> list[tuple[int, int]]:
+    # Returns non-empty paragraph spans in already-cleaned text.
+    spans: list[tuple[int, int]] = []
+    for match in re.finditer(r"\S[\s\S]*?(?=\n\s*\n|\Z)", text):
+        start = match.start()
+        end = match.end()
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if start < end:
+            spans.append((start, end))
+    return spans
+
+
+def nonempty_paragraph_count(text: str) -> int:
+    # Counts paragraph-like copied chunks after noise/section stripping.
+    return len(nonempty_paragraph_spans(text.replace("\r\n", "\n").replace("\r", "\n")))
+
+
+def paragraph_range_before(
+    text: str,
+    anchor_start: int,
+    anchor_end: int,
+    paragraph_count: int,
+    max_chars: int = 4000,
+) -> tuple[int, int]:
+    # Builds the first start-side range from copied paragraph count + 1.
+    paragraph_count = max(1, paragraph_count)
+    candidates = [
+        span for span in nonempty_paragraph_spans(text) if span[0] < anchor_end
+    ]
+    selected = candidates[-paragraph_count:] if candidates else []
+    start = selected[0][0] if selected else max(0, anchor_start - max_chars)
+    return max(0, max(start, anchor_start - max_chars)), anchor_end
+
+
+def paragraph_range_after(
+    text: str,
+    anchor_start: int,
+    anchor_end: int,
+    paragraph_count: int,
+    max_chars: int = 4000,
+) -> tuple[int, int]:
+    # Builds the first end-side range from copied paragraph count + 1.
+    paragraph_count = max(1, paragraph_count)
+    candidates = [
+        span for span in nonempty_paragraph_spans(text) if span[1] > anchor_start
+    ]
+    selected = candidates[:paragraph_count] if candidates else []
+    end = selected[-1][1] if selected else min(len(text), anchor_end + max_chars)
+    return anchor_start, min(len(text), min(end, anchor_end + max_chars))
+
+
+def valid_boundary_headings(headings: list[TextHeading]) -> list[TextHeading]:
+    # Keeps headings that can act as boundary-range fallbacks.
+    return [
+        heading
+        for heading in headings
+        if heading.title.casefold() not in HYBRID_IGNORED_HEADING_TITLES
+    ]
+
+
+def sentence_indexes_in_char_range(
+    sentences: list[TextSentence], start: int, end: int
+) -> list[int]:
+    # Finds clean sentence indexes fully inside one candidate search range.
+    return [
+        index
+        for index, sentence in enumerate(sentences)
+        if sentence.start >= start and sentence.end <= end
+    ]
+
+
+def first_sentence_overlap_end(
+    sentences: list[TextSentence], start: int, end: int, count: int = 2
+) -> int:
+    # Returns the end offset of the first N sentences for start-side overlap.
+    indexes = sentence_indexes_in_char_range(sentences, start, end)
+    if not indexes:
+        return min(end, start)
+    return sentences[indexes[min(count, len(indexes)) - 1]].end
+
+
+def last_sentence_overlap_start(
+    sentences: list[TextSentence], start: int, end: int, count: int = 2
+) -> int:
+    # Returns the start offset of the last N sentences for end-side overlap.
+    indexes = sentence_indexes_in_char_range(sentences, start, end)
+    if not indexes:
+        return max(start, end)
+    return sentences[indexes[-min(count, len(indexes))]].start
+
+
+def dedupe_start_search_ranges(
+    sentences: list[TextSentence], ranges: list[tuple[int, int, str]]
+) -> list[tuple[int, int, str]]:
+    # Expands start ranges backward while retaining only a two-sentence overlap.
+    deduped: list[tuple[int, int, str]] = []
+    checked_start: int | None = None
+    checked_end: int | None = None
+    for start, end, label in ranges:
+        if end <= start:
+            continue
+        if checked_start is None or checked_end is None:
+            deduped.append((start, end, label))
+            checked_start, checked_end = start, end
+            continue
+        if start >= checked_start:
+            continue
+        overlap_end = first_sentence_overlap_end(
+            sentences, checked_start, checked_end
+        )
+        adjusted_end = min(end, max(overlap_end, start))
+        if adjusted_end > start:
+            deduped.append((start, adjusted_end, label))
+            checked_start = start
+            checked_end = max(checked_end, end)
+    return deduped
+
+
+def dedupe_end_search_ranges(
+    sentences: list[TextSentence], ranges: list[tuple[int, int, str]]
+) -> list[tuple[int, int, str]]:
+    # Expands end ranges forward while retaining only a two-sentence overlap.
+    deduped: list[tuple[int, int, str]] = []
+    checked_start: int | None = None
+    checked_end: int | None = None
+    for start, end, label in ranges:
+        if end <= start:
+            continue
+        if checked_start is None or checked_end is None:
+            deduped.append((start, end, label))
+            checked_start, checked_end = start, end
+            continue
+        if end <= checked_end:
+            continue
+        overlap_start = last_sentence_overlap_start(
+            sentences, checked_start, checked_end
+        )
+        adjusted_start = max(start, min(overlap_start, end))
+        if end > adjusted_start:
+            deduped.append((adjusted_start, end, label))
+            checked_start = min(checked_start, start)
+            checked_end = end
+    return deduped
+
+
+def staged_start_search_ranges(
+    text: str,
+    headings: list[TextHeading],
+    sentences: list[TextSentence],
+    anchor_start: int,
+    anchor_end: int,
+    paragraph_count: int,
+) -> list[tuple[int, int, str]]:
+    # Builds start-side paragraph, previous-heading, and previous-2-heading ranges.
+    raw_ranges = [
+        (*paragraph_range_before(text, anchor_start, anchor_end, paragraph_count), "paragraphs+1")
+    ]
+    previous_headings = [
+        heading
+        for heading in valid_boundary_headings(headings)
+        if heading.start < anchor_start
+    ]
+    if previous_headings:
+        raw_ranges.append((previous_headings[-1].start, anchor_end, "previous heading"))
+    if len(previous_headings) >= 2:
+        raw_ranges.append((previous_headings[-2].start, anchor_end, "previous 2 headings"))
+    return dedupe_start_search_ranges(sentences, raw_ranges)
+
+
+def staged_end_search_ranges(
+    text: str,
+    headings: list[TextHeading],
+    sentences: list[TextSentence],
+    anchor_start: int,
+    anchor_end: int,
+    paragraph_count: int,
+) -> list[tuple[int, int, str]]:
+    # Builds end-side paragraph, next-heading, and next-2-heading ranges.
+    raw_ranges = [
+        (*paragraph_range_after(text, anchor_start, anchor_end, paragraph_count), "paragraphs+1")
+    ]
+    next_headings = [
+        heading
+        for heading in valid_boundary_headings(headings)
+        if heading.start > anchor_end
+    ]
+    if next_headings:
+        raw_ranges.append((anchor_start, next_headings[0].start, "next heading"))
+    if len(next_headings) >= 2:
+        raw_ranges.append((anchor_start, next_headings[1].start, "next 2 headings"))
+    return dedupe_end_search_ranges(sentences, raw_ranges)
+
+
+def find_sentence_window_match_in_ranges(
+    copied_sentences: list[TextSentence],
+    clean_sentences: list[TextSentence],
+    ranges: list[tuple[int, int, str]],
+    reverse: bool,
+    threshold: float,
+    allow_short_fallback: bool,
+) -> tuple[tuple[int, int, int, int, float], tuple[int, int, str]] | None:
+    # Runs sentence-window matching through staged ranges in order.
+    for range_start, range_end, label in ranges:
+        match = find_sentence_window_match_with_short_fallback(
+            copied_sentences,
+            clean_sentences,
+            range_start,
+            range_end,
+            reverse,
+            threshold,
+            allow_short_fallback=allow_short_fallback,
+        )
+        if match is not None:
+            return match, (range_start, range_end, label)
+    return None
+
+
 def find_sentence_window_match_with_short_fallback(
     copied_sentences: list[TextSentence],
     clean_sentences: list[TextSentence],
@@ -2408,6 +2626,10 @@ def extract_partial_hybrid_text(
     copied_sentences = sentence_spans(copied_clean)
     copied_citations = citation_numbers(copied_matching_text)
     copied_reference_numbers = citation_reference_numbers(copied_matching_text)
+    copied_citation_occurrences = [
+        (match.group(0).strip("[]"), match.start(), match.end())
+        for match in INLINE_REFERENCE_PATTERN.finditer(copied_matching_text)
+    ]
     body_end = len(clean_text)
 
     report_lines = [
@@ -2425,9 +2647,12 @@ def extract_partial_hybrid_text(
     confidence = "medium"
     first_heading = matched_headings[0] if matched_headings else None
     last_heading = matched_headings[-1] if matched_headings else None
-    start_anchor_locked = False
-    start_anchor_start: int | None = None
-    start_anchor_end: int | None = None
+    start_citation_clean_start: int | None = None
+    start_citation_clean_end: int | None = None
+    start_citation_copied_end: int | None = None
+    end_citation_clean_start: int | None = None
+    end_citation_clean_end: int | None = None
+    end_citation_copied_start: int | None = None
     if matched_headings:
         coarse_start = first_heading.start
         coarse_end = last_heading.end
@@ -2461,9 +2686,12 @@ def extract_partial_hybrid_text(
                 ]
                 citation_start = citation_start_sentence.start
                 coarse_start = min(coarse_start, citation_start) if matched_headings else citation_start
-                start_anchor_locked = True
-                start_anchor_start = citation_start_sentence.start
-                start_anchor_end = citation_end_sentence.end
+                start_citation_clean_start = citation_start_sentence.start
+                start_citation_clean_end = citation_end_sentence.end
+                if len(copied_citation_occurrences) >= len(start_sequence):
+                    start_citation_copied_end = copied_citation_occurrences[
+                        len(start_sequence) - 1
+                    ][2]
                 report_lines.append(f"Start citation sequence: {', '.join(start_sequence)}")
             elif matched_headings:
                 report_lines.append("Start citation sequence ignored: all matches are below first heading.")
@@ -2478,8 +2706,20 @@ def extract_partial_hybrid_text(
                 else end_matches
             )
             if end_candidates:
-                citation_end = clean_index.sentences[end_candidates[-1][1].sentence_index].end
+                citation_start_sentence = clean_index.sentences[
+                    end_candidates[-1][0].sentence_index
+                ]
+                citation_end_sentence = clean_index.sentences[
+                    end_candidates[-1][1].sentence_index
+                ]
+                citation_end = citation_end_sentence.end
                 coarse_end = max(coarse_end, citation_end) if matched_headings else citation_end
+                end_citation_clean_start = citation_start_sentence.start
+                end_citation_clean_end = citation_end_sentence.end
+                if len(copied_citation_occurrences) >= len(end_sequence):
+                    end_citation_copied_start = copied_citation_occurrences[
+                        -len(end_sequence)
+                    ][1]
                 report_lines.append(f"End citation sequence: {', '.join(end_sequence)}")
             elif matched_headings:
                 report_lines.append("End citation sequence ignored: all matches are above last heading.")
@@ -2489,6 +2729,7 @@ def extract_partial_hybrid_text(
         raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
 
     start_copied_sentences = copied_sentences
+    copied_head = ""
     if first_heading is not None and copied_headings:
         copied_head = copied_matching_text[: copied_headings[0].start]
         copied_head_clean = normalize_copied_text_for_hybrid_sentences(
@@ -2499,27 +2740,43 @@ def extract_partial_hybrid_text(
             start_copied_sentences = head_sentences
             report_lines.append("Start copied sentence range: before first matched heading.")
 
-    start_search_end = (
-        first_heading.start
-        if first_heading is not None
-        else start_anchor_end or coarse_end
+    if first_heading is not None and copied_head:
+        start_anchor_start = first_heading.start
+        start_anchor_end = first_heading.start
+        start_paragraph_count = nonempty_paragraph_count(copied_head) + 1
+    elif start_citation_clean_start is not None and start_citation_clean_end is not None:
+        start_anchor_start = start_citation_clean_start
+        start_anchor_end = start_citation_clean_end
+        copied_prefix = copied_matching_text[: start_citation_copied_end or 0]
+        start_paragraph_count = nonempty_paragraph_count(copied_prefix) + 1
+    elif first_heading is not None:
+        start_anchor_start = first_heading.start
+        start_anchor_end = first_heading.start
+        start_paragraph_count = 1
+    else:
+        start_anchor_start = max(0, coarse_start)
+        start_anchor_end = min(len(clean_text), max(coarse_end, start_anchor_start + 1))
+        start_paragraph_count = nonempty_paragraph_count(copied_matching_text) + 1
+
+    start_ranges = staged_start_search_ranges(
+        clean_text,
+        clean_index.headings,
+        clean_index.sentences,
+        start_anchor_start,
+        start_anchor_end,
+        start_paragraph_count,
     )
-    start_search_begin = (
-        bounded_start_search_begin(clean_index.sentences, start_anchor_start or coarse_start)
-        if start_anchor_locked
-        else max(0, coarse_start - 4000)
-    )
-    start_match = find_sentence_window_match_with_short_fallback(
+    start_match_result = find_sentence_window_match_in_ranges(
         start_copied_sentences,
         clean_index.sentences,
-        start_search_begin,
-        start_search_end,
+        start_ranges,
         False,
         threshold,
         allow_short_fallback=len(start_copied_sentences) < 7,
     )
 
-    if start_match:
+    if start_match_result:
+        start_match, (start_search_begin, start_search_end, start_range_label) = start_match_result
         clean_start_index = refine_sentence_start(
             start_copied_sentences,
             clean_index.sentences,
@@ -2530,8 +2787,11 @@ def extract_partial_hybrid_text(
         )
         start = clean_index.sentences[clean_start_index].start
         report_lines.append(f"Start sentence-window score: {start_match[4]:.3f}")
+        report_lines.append(f"Start search range: {start_range_label}")
     else:
         start = coarse_start
+        start_search_begin = start_ranges[0][0] if start_ranges else 0
+        start_search_end = start_ranges[0][1] if start_ranges else coarse_end
         confidence = "low"
         report_lines.append("Start sentence-window match failed; used structural fallback.")
 
@@ -2540,6 +2800,7 @@ def extract_partial_hybrid_text(
         clean_index.sentences,
         start_search_end,
         start,
+        clean_min=start_search_begin,
     )
     if partial_start is not None:
         start = partial_start[0]
@@ -2547,13 +2808,8 @@ def extract_partial_hybrid_text(
             confidence = "medium"
         report_lines.append(f"Start partial sentence score: {partial_start[1]:.3f}")
 
-    end_search_start = last_heading.end if last_heading is not None else start
-    end_search_limit = (
-        next_heading_start(clean_index.headings, last_heading, min(len(clean_text), coarse_end + 4000))
-        if last_heading is not None
-        else min(len(clean_text), coarse_end + 4000)
-    )
     end_copied_sentences = copied_sentences
+    copied_tail = ""
     if last_heading is not None and copied_headings:
         copied_tail = copied_matching_text[copied_headings[-1].end :]
         copied_tail_clean = normalize_copied_text_for_hybrid_sentences(
@@ -2564,17 +2820,43 @@ def extract_partial_hybrid_text(
             end_copied_sentences = tail_sentences
             report_lines.append("End copied sentence range: after last matched heading.")
 
-    end_match = find_sentence_window_match_with_short_fallback(
+    if last_heading is not None and copied_tail:
+        end_anchor_start = last_heading.end
+        end_anchor_end = max(last_heading.end, end_citation_clean_end or last_heading.end)
+        end_paragraph_count = nonempty_paragraph_count(copied_tail) + 1
+    elif end_citation_clean_start is not None and end_citation_clean_end is not None:
+        end_anchor_start = end_citation_clean_start
+        end_anchor_end = end_citation_clean_end
+        copied_suffix = copied_matching_text[end_citation_copied_start or 0 :]
+        end_paragraph_count = nonempty_paragraph_count(copied_suffix) + 1
+    elif last_heading is not None:
+        end_anchor_start = last_heading.end
+        end_anchor_end = last_heading.end
+        end_paragraph_count = 1
+    else:
+        end_anchor_start = start
+        end_anchor_end = min(len(clean_text), max(coarse_end, end_anchor_start + 1))
+        end_paragraph_count = nonempty_paragraph_count(copied_matching_text) + 1
+
+    end_ranges = staged_end_search_ranges(
+        clean_text,
+        clean_index.headings,
+        clean_index.sentences,
+        end_anchor_start,
+        end_anchor_end,
+        end_paragraph_count,
+    )
+    end_match_result = find_sentence_window_match_in_ranges(
         end_copied_sentences,
         clean_index.sentences,
-        end_search_start,
-        end_search_limit,
+        end_ranges,
         True,
         threshold,
         allow_short_fallback=len(end_copied_sentences) < 7,
     )
 
-    if end_match:
+    if end_match_result:
+        end_match, (end_search_start, end_search_limit, end_range_label) = end_match_result
         clean_end_index = refine_sentence_end(
             end_copied_sentences,
             clean_index.sentences,
@@ -2585,8 +2867,11 @@ def extract_partial_hybrid_text(
         )
         end = clean_index.sentences[min(clean_end_index, len(clean_index.sentences)) - 1].end
         report_lines.append(f"End sentence-window score: {end_match[4]:.3f}")
+        report_lines.append(f"End search range: {end_range_label}")
     else:
         end = coarse_end
+        end_search_start = end_ranges[0][0] if end_ranges else start
+        end_search_limit = end_ranges[0][1] if end_ranges else coarse_end
         confidence = "low"
         report_lines.append("End sentence-window match failed; used structural fallback.")
 

@@ -1325,6 +1325,60 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("The training compute of notable", result.text)
         self.assertIn("Start sentence-window score:", result.report)
 
+    def test_hybrid_start_uses_previous_heading_stage_after_paragraph_range_fails(self):
+        # Verifies start expansion skips already-checked ranges except for the overlap.
+        clean = (
+            "== Earlier ==\n\n"
+            "Earlier material should stay out.\n\n"
+            "== Previous section ==\n\n"
+            "Selected start sentence one has distinctive wording. "
+            "Selected start sentence two keeps the window stable. "
+            "Selected start sentence three completes the copied window.\n\n"
+            "Filler paragraph one sits closer to the target heading.\n\n"
+            "Filler paragraph two also sits closer to the target heading.\n\n"
+            "== Target section ==\n\n"
+            "Target body sentence follows the heading."
+        )
+        copied = (
+            "Selected start sentence one has distinctive wording. "
+            "Selected start sentence two keeps the window stable. "
+            "Selected start sentence three completes the copied window.\n\n"
+            "Target section\n"
+            "Target body sentence follows the heading."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.startswith("Selected start sentence one"))
+        self.assertNotIn("Earlier material should stay out.", result.text)
+        self.assertIn("Start search range: previous heading", result.report)
+
+    def test_hybrid_end_uses_next_heading_stage_after_paragraph_range_fails(self):
+        # Verifies end expansion searches the next heading-bounded range with overlap only.
+        clean = (
+            "== Target section ==\n\n"
+            "Target body sentence starts the selected area.\n\n"
+            "Filler paragraph one is closer to the heading.\n\n"
+            "Filler paragraph two is also closer to the heading.\n\n"
+            "Selected end sentence one has distinctive wording. "
+            "Selected end sentence two keeps the window stable. "
+            "Selected end sentence three completes the copied window.\n\n"
+            "== Next section ==\n\n"
+            "Outside next section should stay out."
+        )
+        copied = (
+            "Target section\n"
+            "Selected end sentence one has distinctive wording. "
+            "Selected end sentence two keeps the window stable. "
+            "Selected end sentence three completes the copied window."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("Selected end sentence three completes the copied window.", result.text)
+        self.assertNotIn("Outside next section should stay out.", result.text)
+        self.assertIn("End search range: next heading", result.report)
+
     def test_hybrid_end_refine_skips_copied_table_row_and_resyncs(self):
         # Verifies ordered refine can skip copied-only table/code rows and match the next sentence.
         clean = (

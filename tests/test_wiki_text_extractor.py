@@ -14,12 +14,15 @@ from wiki_text_extractor import (
     extraction_output_path,
     extract_image_captions_from_html,
     extract_partial_hybrid_text,
+    extract_partial_token_text,
     output_path_for_method,
     page_request_from_url,
     partial_hybrid_output_path,
     partial_hybrid_report_path,
     partial_match_report_path,
     partial_output_path,
+    partial_token_output_path,
+    partial_token_report_path,
     normalize_copied_text_for_hybrid_sentences,
     normalize_copied_math_for_hybrid,
     extract_partial_text,
@@ -714,6 +717,16 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(args.math, "latex")
         self.assertEqual(args.references, "none")
 
+    def test_partial_token_cli_defaults_to_latex_math_and_no_fuzzy(self):
+        # Verifies token partial defaults keep LaTeX math and avoid fuzzy confirmation.
+        from extract_partial_token import build_parser
+
+        args = build_parser().parse_args(["--url", "https://en.wikipedia.org/wiki/Kuiper_belt"])
+
+        self.assertEqual(args.math, "latex")
+        self.assertEqual(args.confirm, "none")
+        self.assertEqual(args.window_tokens, 120)
+
     def test_hybrid_index_extracts_headings_citations_and_references_boundary(self):
         # Verifies the hybrid index sees structural headings/citations but excludes final references.
         text = (
@@ -745,6 +758,77 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(len(matches), 2)
         self.assertEqual(matches[0][0].number, "10")
         self.assertEqual(matches[0][1].number, "12")
+
+    def test_token_partial_extraction_uses_token_overlap_and_order(self):
+        # Verifies token partial extraction can slice a distinctive copied section without fuzzy matching.
+        clean = (
+            "Opening context should stay outside the token output.\n\n"
+            "Alpha vector calibration starts the selected block. "
+            "Beta decoder alignment preserves the selected order. "
+            "Gamma retrieval scoring closes the selected block.\n\n"
+            "Trailing context should stay outside the token output."
+        )
+        copied = (
+            "Alpha vector calibration starts the selected block. "
+            "Beta decoder alignment preserves the selected order. "
+            "Gamma retrieval scoring closes the selected block."
+        )
+
+        result = extract_partial_token_text(
+            clean,
+            copied,
+            window_tokens=20,
+            min_score=0.60,
+        )
+
+        self.assertIn("Alpha vector calibration starts", result.text)
+        self.assertIn("Gamma retrieval scoring closes", result.text)
+        self.assertNotIn("Opening context", result.text)
+        self.assertNotIn("Trailing context", result.text)
+        self.assertIn("Start token score:", result.report)
+        self.assertIn("Start ordered coverage:", result.report)
+        self.assertIn("Confirm mode: none", result.report)
+
+    def test_token_partial_strips_html_image_captions_from_copied_input(self):
+        # Verifies token matching reuses HTML figure captions to remove pasted caption noise.
+        caption = (
+            "Caption noise copied from an image with enough descriptive words "
+            "to trigger conservative caption stripping."
+        )
+        html = f"""
+        <div class="mw-parser-output">
+          <figure>
+            <figcaption>{caption}</figcaption>
+          </figure>
+          <p>Body text.</p>
+        </div>
+        """
+        captions = extract_image_captions_from_html(html)
+        clean = (
+            "Introductory context should stay outside.\n\n"
+            "Selected token passage starts with stable wording. "
+            "Selected token passage ends with clear wording.\n\n"
+            "Later context should stay outside."
+        )
+        copied = (
+            f"{caption}\n\n"
+            "Selected token passage starts with stable wording. "
+            "Selected token passage ends with clear wording.\n\n"
+            f"{caption}"
+        )
+
+        result = extract_partial_token_text(
+            clean,
+            copied,
+            window_tokens=20,
+            min_score=0.60,
+            copied_image_captions=captions,
+        )
+
+        self.assertIn("Selected token passage starts", result.text)
+        self.assertNotIn("Caption noise copied", result.text)
+        self.assertIn("Copied image captions stripped: 2", result.report)
+
 
     def test_sentence_window_chunks_step_three_with_tail_backfill(self):
         # Verifies copied chunks step by three sentences and backfill short tails to three.
@@ -1617,6 +1701,14 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(
             partial_hybrid_report_path("output/kuiper_belt.txt", page),
             Path("output/Kuiper_belt/English/partial_hybrid_match_report.txt"),
+        )
+        self.assertEqual(
+            partial_token_output_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/partial_token_text.txt"),
+        )
+        self.assertEqual(
+            partial_token_report_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/partial_token_match_report.txt"),
         )
 
     def test_compare_texts_reports_mismatch(self):

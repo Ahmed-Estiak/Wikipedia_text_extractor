@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter, defaultdict
 import difflib
 import json
 import re
@@ -22,6 +23,36 @@ USER_AGENT = "WikipediaTextExtractor/0.1"
 EXTRACTION_METHODS = ("extracts", "html")
 MATH_MODES = ("remove", "latex", "keep")
 PARTIAL_REFERENCE_MODES = ("none", "original", "smart")
+TOKEN_CONFIRM_MODES = ("none", "fuzzy")
+TOKEN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "have",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "their",
+    "these",
+    "this",
+    "to",
+    "was",
+    "were",
+    "with",
+}
 MATH_IDENTIFIER_ALLOWLIST = {
     "argmax",
     "argmin",
@@ -144,6 +175,40 @@ class HybridExtractionResult:
     start: int
     end: int
     confidence: str
+
+
+@dataclass(frozen=True)
+class TextToken:
+    # Records one normalized token and its original character offsets.
+    value: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class TokenAnchorMatch:
+    # Records one token-anchor match and its diagnostic scores.
+    score: float
+    overlap_score: float
+    ordered_score: float
+    fuzzy_score: float | None
+    start_token: int
+    end_token: int
+    start: int
+    end: int
+    candidates_checked: int
+    confirm_used: bool
+
+
+@dataclass(frozen=True)
+class TokenExtractionResult:
+    # Carries token partial output and a readable decision report.
+    text: str
+    report: str
+    start: int
+    end: int
+    start_match: TokenAnchorMatch
+    end_match: TokenAnchorMatch
 
 
 class PartialExtractionError(ValueError):
@@ -1895,6 +1960,248 @@ def token_overlap_score(left: str, right: str) -> float:
     return len(left_tokens & right_tokens) / max(len(left_tokens), len(right_tokens))
 
 
+def token_excluded(index: int, excluded_spans: list[tuple[int, int]]) -> bool:
+    # Checks whether one token offset sits inside an excluded text span.
+    return any(start <= index < end for start, end in excluded_spans)
+
+
+def tokenize_with_offsets(
+    text: str, excluded_spans: list[tuple[int, int]] | None = None
+) -> list[TextToken]:
+    # Tokenizes English text while preserving original character offsets.
+    excluded_spans = excluded_spans or []
+    reference_spans = [(match.start(), match.end()) for match in INLINE_REFERENCE_PATTERN.finditer(text)]
+    all_excluded = excluded_spans + reference_spans
+    tokens: list[TextToken] = []
+    for match in re.finditer(r"[A-Za-z0-9]+", text):
+        if token_excluded(match.start(), all_excluded):
+            continue
+        value = match.group(0).casefold()
+        if value:
+            tokens.append(TextToken(value, match.start(), match.end()))
+    return tokens
+
+
+def build_token_inverted_index(tokens: list[TextToken]) -> dict[str, list[int]]:
+    # Builds token -> token positions for fast candidate generation.
+    index: dict[str, list[int]] = defaultdict(list)
+    for position, token in enumerate(tokens):
+        index[token.value].append(position)
+    return dict(index)
+
+
+def token_weight(token: str, frequencies: Counter[str]) -> float:
+    # Gives rare/content tokens more influence than common function words.
+    frequency = max(1, frequencies[token])
+    weight = 1.0 / (frequency ** 0.5)
+    if token in TOKEN_STOPWORDS or len(token) <= 2:
+        weight *= 0.25
+    return weight
+
+
+def weighted_token_overlap(
+    anchor_tokens: list[str], candidate_tokens: list[str], frequencies: Counter[str]
+) -> float:
+    # Scores weighted multiset overlap from the pasted anchor's perspective.
+    if not anchor_tokens or not candidate_tokens:
+        return 0.0
+    anchor_counts = Counter(anchor_tokens)
+    candidate_counts = Counter(candidate_tokens)
+    denominator = sum(
+        count * token_weight(token, frequencies)
+        for token, count in anchor_counts.items()
+    )
+    if denominator <= 0:
+        return 0.0
+    numerator = sum(
+        min(count, candidate_counts.get(token, 0)) * token_weight(token, frequencies)
+        for token, count in anchor_counts.items()
+    )
+    return numerator / denominator
+
+
+def ordered_token_coverage(anchor_tokens: list[str], candidate_tokens: list[str]) -> float:
+    # Measures how much of the pasted anchor appears in the same order.
+    if not anchor_tokens or not candidate_tokens:
+        return 0.0
+    anchor_index = 0
+    matched = 0
+    for token in candidate_tokens:
+        if token == anchor_tokens[anchor_index]:
+            matched += 1
+            anchor_index += 1
+            if anchor_index >= len(anchor_tokens):
+                break
+    return matched / len(anchor_tokens)
+
+
+def meaningful_anchor_tokens(tokens: list[TextToken], side: str, window_tokens: int) -> list[str]:
+    # Selects start/end token anchors from the pasted input.
+    values = [token.value for token in tokens]
+    if len(values) <= window_tokens:
+        return values
+    return values[:window_tokens] if side == "start" else values[-window_tokens:]
+
+
+def rare_anchor_token_positions(
+    anchor_tokens: list[str],
+    inverted_index: dict[str, list[int]],
+    total_clean_tokens: int,
+    rare_token_limit: int = 28,
+) -> list[tuple[str, list[int]]]:
+    # Chooses useful low-frequency anchor tokens for candidate generation.
+    unique_tokens = sorted(
+        set(anchor_tokens),
+        key=lambda token: (len(inverted_index.get(token, [])) or total_clean_tokens, -len(token), token),
+    )
+    selected: list[tuple[str, list[int]]] = []
+    max_frequency = max(20, total_clean_tokens // 35)
+    for token in unique_tokens:
+        positions = inverted_index.get(token, [])
+        if not positions or token in TOKEN_STOPWORDS or len(token) <= 2:
+            continue
+        if len(positions) > max_frequency:
+            continue
+        selected.append((token, positions))
+        if len(selected) >= rare_token_limit:
+            break
+    if selected:
+        return selected
+    for token in unique_tokens:
+        positions = inverted_index.get(token, [])
+        if positions:
+            selected.append((token, positions))
+        if len(selected) >= rare_token_limit:
+            break
+    return selected
+
+
+def token_candidate_starts(
+    anchor_tokens: list[str],
+    clean_tokens: list[TextToken],
+    inverted_index: dict[str, list[int]],
+    max_candidates: int,
+) -> list[int]:
+    # Uses rare shared tokens to propose aligned clean token-window starts.
+    if not anchor_tokens or not clean_tokens:
+        return []
+    anchor_positions: dict[str, list[int]] = defaultdict(list)
+    for index, token in enumerate(anchor_tokens):
+        anchor_positions[token].append(index)
+    votes: Counter[int] = Counter()
+    rare_tokens = rare_anchor_token_positions(
+        anchor_tokens,
+        inverted_index,
+        len(clean_tokens),
+    )
+    for token, clean_positions in rare_tokens:
+        for clean_position in clean_positions:
+            for anchor_position in anchor_positions[token][:3]:
+                candidate_start = clean_position - anchor_position
+                if candidate_start < 0:
+                    continue
+                if candidate_start >= len(clean_tokens):
+                    continue
+                votes[candidate_start] += 1
+    if not votes:
+        return []
+    return [
+        candidate
+        for candidate, _count in votes.most_common(max_candidates)
+    ]
+
+
+def score_token_candidate(
+    anchor_tokens: list[str],
+    clean_tokens: list[TextToken],
+    candidate_start: int,
+    frequencies: Counter[str],
+) -> tuple[float, float, float, int]:
+    # Scores one clean candidate window using token overlap and ordered coverage.
+    window_size = min(len(anchor_tokens), len(clean_tokens) - candidate_start)
+    if window_size <= 0:
+        return 0.0, 0.0, 0.0, candidate_start
+    candidate_values = [
+        token.value for token in clean_tokens[candidate_start : candidate_start + window_size]
+    ]
+    overlap = weighted_token_overlap(anchor_tokens, candidate_values, frequencies)
+    ordered = ordered_token_coverage(anchor_tokens, candidate_values)
+    score = 0.65 * overlap + 0.35 * ordered
+    return score, overlap, ordered, candidate_start + window_size
+
+
+def fuzzy_confirm_score(anchor_tokens: list[str], candidate_tokens: list[str]) -> float:
+    # Optional close-candidate confirmation without using fuzzy as the primary scorer.
+    return fuzzy_ratio(" ".join(anchor_tokens), " ".join(candidate_tokens))
+
+
+def find_token_anchor_match(
+    clean_tokens: list[TextToken],
+    anchor_tokens: list[str],
+    inverted_index: dict[str, list[int]],
+    frequencies: Counter[str],
+    min_score: float,
+    max_candidates: int = 240,
+    confirm_mode: str = "none",
+    tie_margin: float = 0.03,
+    min_start_token: int = 0,
+    tie_preference: str = "first",
+) -> TokenAnchorMatch | None:
+    # Finds one token anchor using inverted-index candidates and ordered-token scoring.
+    if confirm_mode not in TOKEN_CONFIRM_MODES:
+        raise ValueError(f"Unsupported token confirm mode: {confirm_mode}")
+    candidate_starts = [
+        start
+        for start in token_candidate_starts(
+            anchor_tokens,
+            clean_tokens,
+            inverted_index,
+            max_candidates,
+        )
+        if start >= min_start_token
+    ]
+    scored: list[tuple[float, float, float, int, int, float | None, bool]] = []
+    for candidate_start in candidate_starts:
+        score, overlap, ordered, candidate_end = score_token_candidate(
+            anchor_tokens,
+            clean_tokens,
+            candidate_start,
+            frequencies,
+        )
+        if score >= min_score:
+            scored.append((score, overlap, ordered, candidate_start, candidate_end, None, False))
+    if not scored:
+        return None
+    position_key = (lambda item: item[3]) if tie_preference == "first" else (lambda item: -item[3])
+    scored.sort(key=lambda item: (-item[0], -item[2], position_key(item)))
+    close = [
+        item for item in scored[:5] if scored[0][0] - item[0] <= tie_margin
+    ]
+    if confirm_mode == "fuzzy" and len(close) > 1:
+        confirmed: list[tuple[float, float, float, int, int, float | None, bool]] = []
+        for score, overlap, ordered, start, end, _fuzzy, _used in close:
+            candidate_values = [token.value for token in clean_tokens[start:end]]
+            fuzzy_score = fuzzy_confirm_score(anchor_tokens, candidate_values)
+            confirmed.append((score, overlap, ordered, start, end, fuzzy_score, True))
+        confirmed.sort(key=lambda item: (-item[5], -item[0], -item[2], position_key(item)))
+        best = confirmed[0]
+    else:
+        best = scored[0]
+    score, overlap, ordered, start, end, fuzzy_score, confirm_used = best
+    return TokenAnchorMatch(
+        score=score,
+        overlap_score=overlap,
+        ordered_score=ordered,
+        fuzzy_score=fuzzy_score,
+        start_token=start,
+        end_token=end,
+        start=clean_tokens[start].start,
+        end=clean_tokens[end - 1].end,
+        candidates_checked=len(candidate_starts),
+        confirm_used=confirm_used,
+    )
+
+
 def hybrid_window_score(left: str, right: str) -> float:
     # Blends token overlap and character sequence similarity.
     left_normalized = normalize_for_match(left)
@@ -2811,6 +3118,191 @@ def normalize_copied_text_for_hybrid_sentences(
     return "\n".join(kept_lines)
 
 
+def snap_start_to_sentence(sentences: list[TextSentence], start: int) -> int:
+    # Moves a token start to the containing sentence start when available.
+    for sentence in sentences:
+        if sentence.start <= start < sentence.end:
+            return sentence.start
+        if start < sentence.start:
+            return sentence.start
+    return start
+
+
+def snap_end_to_sentence(sentences: list[TextSentence], end: int) -> int:
+    # Moves a token end to the containing sentence end when available.
+    for sentence in sentences:
+        if sentence.start < end <= sentence.end:
+            return sentence.end
+        if end < sentence.start:
+            return sentence.start
+    return end
+
+
+def extract_partial_token_text(
+    clean_text: str,
+    copied_text: str,
+    window_tokens: int = 120,
+    min_score: float = 0.72,
+    confirm_mode: str = "none",
+    max_candidates: int = 240,
+    copied_image_captions: list[str] | None = None,
+) -> TokenExtractionResult:
+    # Extracts partial text using inverted-index token matching instead of fuzzy matching.
+    if confirm_mode not in TOKEN_CONFIRM_MODES:
+        raise ValueError(f"Unsupported token confirm mode: {confirm_mode}")
+    if window_tokens < 20:
+        raise ValueError("window_tokens must be at least 20")
+
+    clean_index = build_hybrid_text_index(clean_text)
+    copied_text, stripped_caption_count = strip_copied_caption_phrases(
+        copied_text,
+        copied_image_captions,
+    )
+    copied_matching_text = strip_copied_ignored_sections(
+        copied_text,
+        clean_index.headings,
+    )
+    copied_clean = normalize_copied_text_for_hybrid_sentences(
+        copied_matching_text,
+        clean_index.headings,
+    )
+    copied_tokens = tokenize_with_offsets(copied_clean)
+    if len(copied_tokens) < 8:
+        message = "failed: not enough copied tokens for token matching"
+        report = "\n".join(
+            [
+                "Wikipedia Token Partial Extraction Report",
+                "",
+                message,
+                f"Copied tokens: {len(copied_tokens)}",
+            ]
+        )
+        raise PartialExtractionError(message, report)
+
+    ignored_spans = heading_section_spans(
+        clean_index.headings,
+        HYBRID_IGNORED_HEADING_TITLES,
+        len(clean_text),
+    )
+    clean_tokens = tokenize_with_offsets(clean_text, ignored_spans)
+    if len(clean_tokens) < 8:
+        message = "failed: not enough clean tokens for token matching"
+        report = "\n".join(
+            [
+                "Wikipedia Token Partial Extraction Report",
+                "",
+                message,
+                f"Clean tokens: {len(clean_tokens)}",
+            ]
+        )
+        raise PartialExtractionError(message, report)
+
+    inverted_index = build_token_inverted_index(clean_tokens)
+    frequencies: Counter[str] = Counter(token.value for token in clean_tokens)
+    start_anchor_tokens = meaningful_anchor_tokens(copied_tokens, "start", window_tokens)
+    end_anchor_tokens = meaningful_anchor_tokens(copied_tokens, "end", window_tokens)
+
+    start_match = find_token_anchor_match(
+        clean_tokens,
+        start_anchor_tokens,
+        inverted_index,
+        frequencies,
+        min_score,
+        max_candidates=max_candidates,
+        confirm_mode=confirm_mode,
+        tie_preference="first",
+    )
+    if start_match is None:
+        message = "failed: token start boundary did not meet the minimum score"
+        report = "\n".join(
+            [
+                "Wikipedia Token Partial Extraction Report",
+                "",
+                message,
+                f"Minimum score: {min_score:.3f}",
+                f"Copied tokens: {len(copied_tokens)}",
+            ]
+        )
+        raise PartialExtractionError(message, report)
+
+    end_match = find_token_anchor_match(
+        clean_tokens,
+        end_anchor_tokens,
+        inverted_index,
+        frequencies,
+        min_score,
+        max_candidates=max_candidates,
+        confirm_mode=confirm_mode,
+        min_start_token=start_match.start_token,
+        tie_preference="last",
+    )
+    if end_match is None:
+        message = "failed: token end boundary did not meet the minimum score"
+        report = "\n".join(
+            [
+                "Wikipedia Token Partial Extraction Report",
+                "",
+                message,
+                f"Minimum score: {min_score:.3f}",
+                f"Start token: {start_match.start_token}",
+            ]
+        )
+        raise PartialExtractionError(message, report)
+
+    start = snap_start_to_sentence(clean_index.sentences, start_match.start)
+    end = snap_end_to_sentence(clean_index.sentences, end_match.end)
+    if start >= end:
+        message = "failed: token boundaries are invalid"
+        report = "\n".join(
+            [
+                "Wikipedia Token Partial Extraction Report",
+                "",
+                message,
+                f"Start offset: {start}",
+                f"End offset: {end}",
+            ]
+        )
+        raise PartialExtractionError(message, report)
+
+    text, _added_references, _missing_references = finalize_partial_hybrid_output(
+        clean_text[start:end].strip(),
+        "none",
+        [],
+        None,
+    )
+    report_lines = [
+        "Wikipedia Token Partial Extraction Report",
+        "",
+        f"Copied tokens: {len(copied_tokens)}",
+        f"Clean tokens: {len(clean_tokens)}",
+        f"Window tokens: {min(window_tokens, len(copied_tokens))}",
+        f"Minimum score: {min_score:.3f}",
+        f"Confirm mode: {confirm_mode}",
+        f"Copied image captions stripped: {stripped_caption_count}",
+        f"Start token score: {start_match.score:.3f}",
+        f"Start overlap: {start_match.overlap_score:.3f}",
+        f"Start ordered coverage: {start_match.ordered_score:.3f}",
+        f"Start candidates checked: {start_match.candidates_checked}",
+        f"Start fuzzy confirm: {start_match.fuzzy_score:.3f}" if start_match.fuzzy_score is not None else "Start fuzzy confirm: none",
+        f"End token score: {end_match.score:.3f}",
+        f"End overlap: {end_match.overlap_score:.3f}",
+        f"End ordered coverage: {end_match.ordered_score:.3f}",
+        f"End candidates checked: {end_match.candidates_checked}",
+        f"End fuzzy confirm: {end_match.fuzzy_score:.3f}" if end_match.fuzzy_score is not None else "End fuzzy confirm: none",
+        f"Start offset: {start}",
+        f"End offset: {end}",
+        f"Output characters: {len(text)}",
+    ]
+    return TokenExtractionResult(
+        text=text,
+        report="\n".join(report_lines),
+        start=start,
+        end=end,
+        start_match=start_match,
+        end_match=end_match,
+    )
+
+
 def extract_partial_hybrid_text(
     clean_text: str,
     copied_text: str,
@@ -3281,6 +3773,16 @@ def partial_hybrid_report_path(output: str, page: PageRequest) -> Path:
     return output_directory(output, page) / "partial_hybrid_match_report.txt"
 
 
+def partial_token_output_path(output: str, page: PageRequest) -> Path:
+    # Builds the token partial extraction output path.
+    return output_directory(output, page) / "partial_token_text.txt"
+
+
+def partial_token_report_path(output: str, page: PageRequest) -> Path:
+    # Builds the token partial extraction report path.
+    return output_directory(output, page) / "partial_token_match_report.txt"
+
+
 def write_text_file(path: Path, text: str) -> None:
     # Writes UTF-8 text after creating any missing output directories.
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -3299,6 +3801,8 @@ def runtime_label_order(label: str) -> tuple[int, str]:
         return 3, label
     if label.startswith("Partial hybrid runtime"):
         return 4, label
+    if label.startswith("Partial token runtime"):
+        return 5, label
     return 9, label
 
 

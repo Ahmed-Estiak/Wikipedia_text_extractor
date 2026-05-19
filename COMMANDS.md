@@ -128,6 +128,35 @@ Keep only copied/used references, sort by original reference number, and renumbe
 .venv\Scripts\python.exe extract_partial_hybrid.py --url "https://en.wikipedia.org/wiki/Large_language_model" --references smart
 ```
 
+## Partial Text: Token Method (Experimental)
+
+This is a faster experimental matcher. It builds an inverted token index from the cleaned article, searches candidate windows around shared rare tokens, then scores them with weighted token overlap and ordered-token coverage. Fuzzy matching is off by default.
+
+Default token partial clean output:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_token.py --url "https://en.wikipedia.org/wiki/Large_language_model"
+```
+
+Use optional fuzzy confirmation only when several token candidates are very close:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_token.py --url "https://en.wikipedia.org/wiki/Large_language_model" --confirm fuzzy
+```
+
+Tune the token anchor size and minimum score:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_token.py --url "https://en.wikipedia.org/wiki/Large_language_model" --window-tokens 100 --min-score 0.72
+```
+
+Token method outputs:
+
+```text
+output\Large_language_model\English\partial_token_text.txt
+output\Large_language_model\English\partial_token_match_report.txt
+```
+
 ## Debug Reports To Keep
 
 The partial hybrid match report is important for debugging and should be kept:
@@ -184,6 +213,8 @@ large_language_model_comparison.txt
 large_language_model_runtime.txt
 partial_hybrid_text.txt
 partial_hybrid_match_report.txt
+partial_token_text.txt
+partial_token_match_report.txt
 ```
 
 ## Title Instead of URL
@@ -196,6 +227,10 @@ Use `--title` with `--lang` if you do not want to pass a URL.
 
 ```cmd
 .venv\Scripts\python.exe extract_partial_hybrid.py --title "Large language model" --lang en
+```
+
+```cmd
+.venv\Scripts\python.exe extract_partial_token.py --title "Large language model" --lang en
 ```
 
 ## Run Tests

@@ -1895,6 +1895,20 @@ def capped_sentence_char_range(
     return clean_sentences[selected[0]].start, clean_sentences[selected[-1]].end
 
 
+def bounded_start_search_begin(
+    clean_sentences: list[TextSentence],
+    anchor_start: int,
+    max_sentences: int = 15,
+    max_chars: int = 4000,
+) -> int:
+    # Opens a limited range before a start anchor so uncited pre-anchor text can match.
+    if not clean_sentences:
+        return max(0, anchor_start - max_chars)
+    anchor_index = sentence_index_at(clean_sentences, anchor_start)
+    start_index = max(0, anchor_index - max_sentences)
+    return max(clean_sentences[start_index].start, max(0, anchor_start - max_chars))
+
+
 def find_sentence_window_match_with_short_fallback(
     copied_sentences: list[TextSentence],
     clean_sentences: list[TextSentence],
@@ -2412,6 +2426,8 @@ def extract_partial_hybrid_text(
     first_heading = matched_headings[0] if matched_headings else None
     last_heading = matched_headings[-1] if matched_headings else None
     start_anchor_locked = False
+    start_anchor_start: int | None = None
+    start_anchor_end: int | None = None
     if matched_headings:
         coarse_start = first_heading.start
         coarse_end = last_heading.end
@@ -2437,9 +2453,17 @@ def extract_partial_hybrid_text(
                 else start_matches
             )
             if start_candidates:
-                citation_start = clean_index.sentences[start_candidates[0][0].sentence_index].start
+                citation_start_sentence = clean_index.sentences[
+                    start_candidates[0][0].sentence_index
+                ]
+                citation_end_sentence = clean_index.sentences[
+                    start_candidates[0][1].sentence_index
+                ]
+                citation_start = citation_start_sentence.start
                 coarse_start = min(coarse_start, citation_start) if matched_headings else citation_start
                 start_anchor_locked = True
+                start_anchor_start = citation_start_sentence.start
+                start_anchor_end = citation_end_sentence.end
                 report_lines.append(f"Start citation sequence: {', '.join(start_sequence)}")
             elif matched_headings:
                 report_lines.append("Start citation sequence ignored: all matches are below first heading.")
@@ -2475,8 +2499,16 @@ def extract_partial_hybrid_text(
             start_copied_sentences = head_sentences
             report_lines.append("Start copied sentence range: before first matched heading.")
 
-    start_search_end = first_heading.start if first_heading is not None else coarse_end
-    start_search_begin = coarse_start if start_anchor_locked else max(0, coarse_start - 4000)
+    start_search_end = (
+        first_heading.start
+        if first_heading is not None
+        else start_anchor_end or coarse_end
+    )
+    start_search_begin = (
+        bounded_start_search_begin(clean_index.sentences, start_anchor_start or coarse_start)
+        if start_anchor_locked
+        else max(0, coarse_start - 4000)
+    )
     start_match = find_sentence_window_match_with_short_fallback(
         start_copied_sentences,
         clean_index.sentences,

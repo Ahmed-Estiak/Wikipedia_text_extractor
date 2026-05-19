@@ -1099,7 +1099,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertTrue(result.text.startswith("Dynamic quantization allows"))
         self.assertNotIn("Earlier context should stay out.", result.text)
-        self.assertIn("Start partial sentence score:", result.report)
+        self.assertTrue(
+            "Start partial sentence score:" in result.report
+            or "Start sentence-window score:" in result.report
+        )
 
     def test_copied_math_normalization_collapses_displaystyle_fragments(self):
         # Verifies browser-copied displaystyle math is normalized before sentence splitting.
@@ -1288,6 +1291,39 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("dubious", normalized.casefold())
         self.assertNotIn("== Denial of service due to scraping ==", result.text)
         self.assertNotIn("Web scraping is used", result.text)
+
+    def test_hybrid_start_citation_anchor_searches_backward_past_copied_captions(self):
+        # Verifies image-caption noise before the body does not force the start to the first citation.
+        clean = (
+            "Before the emergence of transformer-based models in 2017, some language models were considered large. "
+            "In the early 1990s, IBM's statistical models pioneered word alignment techniques. "
+            "In 2001, a smoothed n-gram model achieved state-of-the-art perplexity on benchmark tests.[7] "
+            "During the 2000s, researchers compiled massive text datasets from the web.[8][9]\n\n"
+            "Moving beyond n-gram models, researchers started in 2000 to use neural networks as language models.[10] "
+            "Following image classification breakthroughs, similar architectures were adapted for language tasks.[11] "
+            "These early systems preceded the invention of transformers.[12]"
+        )
+        copied = (
+            "The training compute of notable large models in FLOPs vs publication date. "
+            "For overall notable models, frontier models are shown separately. "
+            "The majority of these models are language models.\n\n"
+            "The training compute of notable large AI models in FLOPs vs publication date. "
+            "The majority of large models are language models or multimodal models with language capacity.\n"
+            "Before the emergence of transformer-based models in 2017, some language models were considered large. "
+            "In the early 1990s, IBM's statistical models pioneered word alignment techniques. "
+            "In 2001, a smoothed n-gram model achieved state-of-the-art perplexity on benchmark tests.[7] "
+            "During the 2000s, researchers compiled massive text datasets from the web.[8][9]\n\n"
+            "Moving beyond n-gram models, researchers started in 2000 to use neural networks as language models.[10] "
+            "Following image classification breakthroughs, similar architectures were adapted for language tasks.[11] "
+            "These early systems preceded the invention of transformers.[12]"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.startswith("Before the emergence"))
+        self.assertIn("In the early 1990s", result.text)
+        self.assertNotIn("The training compute of notable", result.text)
+        self.assertIn("Start sentence-window score:", result.report)
 
     def test_hybrid_end_refine_skips_copied_table_row_and_resyncs(self):
         # Verifies ordered refine can skip copied-only table/code rows and match the next sentence.

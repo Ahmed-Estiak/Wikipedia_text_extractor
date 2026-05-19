@@ -1,4 +1,5 @@
 from pathlib import Path
+import importlib.util
 import unittest
 
 from wiki_text_extractor import (
@@ -21,6 +22,8 @@ from wiki_text_extractor import (
     partial_hybrid_report_path,
     partial_match_report_path,
     partial_output_path,
+    partial_dmp_output_path,
+    partial_dmp_report_path,
     partial_token_output_path,
     partial_token_report_path,
     normalize_copied_text_for_hybrid_sentences,
@@ -727,6 +730,16 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(args.confirm, "none")
         self.assertEqual(args.window_tokens, 120)
 
+    def test_partial_dmp_cli_defaults_to_latex_math(self):
+        # Verifies DMP partial defaults keep LaTeX math and use a bounded diff timeout.
+        from extract_partial_dmp import build_parser
+
+        args = build_parser().parse_args(["--url", "https://en.wikipedia.org/wiki/Kuiper_belt"])
+
+        self.assertEqual(args.math, "latex")
+        self.assertEqual(args.min_coverage, 0.72)
+        self.assertEqual(args.timeout, 1.0)
+
     def test_hybrid_index_extracts_headings_citations_and_references_boundary(self):
         # Verifies the hybrid index sees structural headings/citations but excludes final references.
         text = (
@@ -828,6 +841,40 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Selected token passage starts", result.text)
         self.assertNotIn("Caption noise copied", result.text)
         self.assertIn("Copied image captions stripped: 2", result.report)
+
+    def test_dmp_partial_extraction_uses_diff_equal_blocks_when_available(self):
+        # Verifies optional DMP matching can derive a clean span from copied text.
+        if importlib.util.find_spec("diff_match_patch") is None:
+            self.skipTest("diff-match-patch package is not installed")
+        from extract_partial_dmp import dmp_partial_match
+
+        clean = (
+            "Opening context should stay outside the DMP output.\n\n"
+            "Alpha vector calibration starts the selected block. "
+            "Beta decoder alignment preserves the selected order. "
+            "Gamma retrieval scoring closes the selected block.\n\n"
+            "Trailing context should stay outside the DMP output."
+        )
+        copied = (
+            "Alpha vector calibration starts the selected block. "
+            "Beta decoder alignment preserves the selected order. "
+            "Gamma retrieval scoring closes the selected block."
+        )
+
+        text, report = dmp_partial_match(
+            clean,
+            copied,
+            min_coverage=0.70,
+            anchor_chars=120,
+            chunk_size=24,
+            timeout=0.5,
+        )
+
+        self.assertIn("Alpha vector calibration starts", text)
+        self.assertIn("Gamma retrieval scoring closes", text)
+        self.assertNotIn("Opening context", text)
+        self.assertNotIn("Trailing context", text)
+        self.assertIn("Start coverage:", report)
 
 
     def test_sentence_window_chunks_step_three_with_tail_backfill(self):
@@ -1701,6 +1748,14 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(
             partial_hybrid_report_path("output/kuiper_belt.txt", page),
             Path("output/Kuiper_belt/English/partial_hybrid_match_report.txt"),
+        )
+        self.assertEqual(
+            partial_dmp_output_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/partial_dmp_text.txt"),
+        )
+        self.assertEqual(
+            partial_dmp_report_path("output/kuiper_belt.txt", page),
+            Path("output/Kuiper_belt/English/partial_dmp_match_report.txt"),
         )
         self.assertEqual(
             partial_token_output_path("output/kuiper_belt.txt", page),

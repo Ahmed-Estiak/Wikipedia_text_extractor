@@ -157,6 +157,35 @@ output\Large_language_model\English\partial_token_text.txt
 output\Large_language_model\English\partial_token_match_report.txt
 ```
 
+## Partial Text: Diff Match Patch Method (Experimental)
+
+This method is only for timing comparison. It uses Google's `diff-match-patch` package with short start/end anchor chunks after the same caption/noise cleanup. It does not run a full article-wide DMP diff by default, because that is too slow for large pages.
+
+Install the optional package once if it is not already installed:
+
+```cmd
+.venv\Scripts\python.exe -m pip install diff-match-patch
+```
+
+Default DMP partial clean output:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_dmp.py --url "https://en.wikipedia.org/wiki/Large_language_model"
+```
+
+Tune DMP coverage, anchor size, and timeout:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_dmp.py --url "https://en.wikipedia.org/wiki/Large_language_model" --min-coverage 0.72 --anchor-chars 600 --timeout 1.0
+```
+
+DMP method outputs:
+
+```text
+output\Large_language_model\English\partial_dmp_text.txt
+output\Large_language_model\English\partial_dmp_match_report.txt
+```
+
 ## Debug Reports To Keep
 
 The partial hybrid match report is important for debugging and should be kept:
@@ -215,6 +244,8 @@ partial_hybrid_text.txt
 partial_hybrid_match_report.txt
 partial_token_text.txt
 partial_token_match_report.txt
+partial_dmp_text.txt
+partial_dmp_match_report.txt
 ```
 
 ## Title Instead of URL
@@ -231,6 +262,10 @@ Use `--title` with `--lang` if you do not want to pass a URL.
 
 ```cmd
 .venv\Scripts\python.exe extract_partial_token.py --title "Large language model" --lang en
+```
+
+```cmd
+.venv\Scripts\python.exe extract_partial_dmp.py --title "Large language model" --lang en
 ```
 
 ## Run Tests

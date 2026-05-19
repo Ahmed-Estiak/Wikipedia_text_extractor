@@ -3783,6 +3783,16 @@ def partial_token_report_path(output: str, page: PageRequest) -> Path:
     return output_directory(output, page) / "partial_token_match_report.txt"
 
 
+def partial_dmp_output_path(output: str, page: PageRequest) -> Path:
+    # Builds the Diff Match Patch partial extraction output path.
+    return output_directory(output, page) / "partial_dmp_text.txt"
+
+
+def partial_dmp_report_path(output: str, page: PageRequest) -> Path:
+    # Builds the Diff Match Patch partial extraction report path.
+    return output_directory(output, page) / "partial_dmp_match_report.txt"
+
+
 def write_text_file(path: Path, text: str) -> None:
     # Writes UTF-8 text after creating any missing output directories.
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -3803,6 +3813,8 @@ def runtime_label_order(label: str) -> tuple[int, str]:
         return 4, label
     if label.startswith("Partial token runtime"):
         return 5, label
+    if label.startswith("Partial DMP runtime"):
+        return 6, label
     return 9, label
 
 

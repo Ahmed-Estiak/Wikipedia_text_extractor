@@ -13,6 +13,7 @@ from wiki_text_extractor import (
     PartialExtractionError,
     PARTIAL_REFERENCE_MODES,
     clean_wikipedia_html_with_references,
+    extract_image_captions_from_html,
     extract_reference_entries_from_html,
     extract_partial_hybrid_text,
     fetch_page_html,
@@ -111,6 +112,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             threshold=args.threshold,
             references_mode=args.references,
             reference_entries=extract_reference_entries_from_html(html),
+            copied_image_captions=extract_image_captions_from_html(html),
         )
         match_seconds = time.perf_counter() - match_started_at
         seconds = time.perf_counter() - started_at

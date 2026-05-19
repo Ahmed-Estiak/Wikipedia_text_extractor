@@ -12,6 +12,7 @@ from wiki_text_extractor import (
     comparison_output_path,
     citation_sequence_matches,
     extraction_output_path,
+    extract_image_captions_from_html,
     extract_partial_hybrid_text,
     output_path_for_method,
     page_request_from_url,
@@ -184,6 +185,32 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             clean_wikipedia_html(html),
             "The Kuiper belt is in the outer Solar System.",
         )
+
+    def test_extracts_image_captions_from_html_for_partial_input_cleanup(self):
+        # Verifies figure/thumb captions can be listed separately from the clean article text.
+        html = """
+        <div class="mw-parser-output">
+          <figure>
+            <figcaption>The training compute of notable large models in FLOPs vs publication date.<sup class="reference">[1]</sup></figcaption>
+          </figure>
+          <div class="thumb">
+            <div class="thumbcaption">An illustration of the main components of the transformer model.</div>
+          </div>
+          <p>Article body.</p>
+        </div>
+        """
+
+        captions = extract_image_captions_from_html(html)
+
+        self.assertIn(
+            "The training compute of notable large models in FLOPs vs publication date.",
+            captions,
+        )
+        self.assertIn(
+            "An illustration of the main components of the transformer model.",
+            captions,
+        )
+        self.assertNotIn("[1]", " ".join(captions))
 
     def test_preserves_inline_file_symbols_from_titles(self):
         # Verifies inline glyph images keep symbol titles while descriptive image titles are ignored.
@@ -1324,6 +1351,50 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("In the early 1990s", result.text)
         self.assertNotIn("The training compute of notable", result.text)
         self.assertIn("Start sentence-window score:", result.report)
+
+    def test_hybrid_strips_html_image_captions_from_copied_input(self):
+        # Verifies known HTML captions are stripped before heading/citation/sentence matching.
+        html = """
+        <div class="mw-parser-output">
+          <figure>
+            <figcaption>The training compute of notable large models in FLOPs vs publication date over the period 2010-2024. The majority of these models are language models.</figcaption>
+          </figure>
+          <div class="thumb">
+            <div class="thumbcaption">An illustration of the main components of the transformer model from the original paper.</div>
+          </div>
+        </div>
+        """
+        captions = extract_image_captions_from_html(html)
+        clean = (
+            "Before the emergence of transformer-based models in 2017, some language models were considered large. "
+            "In the early 1990s, IBM's statistical models pioneered word alignment techniques. "
+            "In 2001, a smoothed n-gram model achieved state-of-the-art perplexity on benchmark tests.[7] "
+            "During the 2000s, researchers compiled massive text datasets from the web.[8][9]\n\n"
+            "Moving beyond n-gram models, researchers started in 2000 to use neural networks as language models.[10] "
+            "These early systems preceded the invention of transformers.[11]"
+        )
+        copied = (
+            "The training compute of notable large models in FLOPs vs publication date over the period 2010-2024. "
+            "The majority of these models are language models.\n"
+            "Before the emergence of transformer-based models in 2017, some language models were considered large. "
+            "In the early 1990s, IBM's statistical models pioneered word alignment techniques. "
+            "In 2001, a smoothed n-gram model achieved state-of-the-art perplexity on benchmark tests.[7] "
+            "During the 2000s, researchers compiled massive text datasets from the web.[8][9]\n\n"
+            "Moving beyond n-gram models, researchers started in 2000 to use neural networks as language models.[10] "
+            "These early systems preceded the invention of transformers.[11]\n"
+            "An illustration of the main components of the transformer model from the original paper."
+        )
+
+        result = extract_partial_hybrid_text(
+            clean,
+            copied,
+            copied_image_captions=captions,
+        )
+
+        self.assertTrue(result.text.startswith("Before the emergence"))
+        self.assertNotIn("The training compute of notable", result.text)
+        self.assertNotIn("An illustration of the main components", result.text)
+        self.assertIn("Copied image captions stripped: 2", result.report)
 
     def test_hybrid_start_uses_previous_heading_stage_after_paragraph_range_fails(self):
         # Verifies start expansion skips already-checked ranges except for the overlap.

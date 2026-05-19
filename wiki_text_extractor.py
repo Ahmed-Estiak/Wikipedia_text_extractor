@@ -543,6 +543,86 @@ def is_non_word_glyph(value: str) -> bool:
     return bool(value.strip()) and not re.search(r"\w", value)
 
 
+class WikipediaCaptionParser(HTMLParser):
+    """Extract figure/image captions from Wikipedia article HTML."""
+
+    CAPTION_CLASSES = {
+        "gallerytext",
+        "mw-kartographer-caption",
+        "thumbcaption",
+    }
+    SKIP_CLASSES = {"mw-cite-backlink", "mw-editsection", "noprint", "reference"}
+    BLOCK_TAGS = {"br", "div", "li", "p"}
+    VOID_TAGS = WikipediaTextParser.VOID_TAGS
+
+    def __init__(self) -> None:
+        # Initializes state for collecting visible caption text only.
+        super().__init__(convert_charrefs=True)
+        self.captions: list[str] = []
+        self._capture_depth = 0
+        self._skip_depth = 0
+        self._current_parts: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # Starts capture for caption containers and skips citation/editing noise.
+        attr_map = {name: value or "" for name, value in attrs}
+        classes = set(attr_map.get("class", "").split())
+
+        if self._skip_depth:
+            self._skip_depth += 1
+            return
+
+        if tag in {"script", "style"} or classes.intersection(self.SKIP_CLASSES):
+            self._skip_depth += 1
+            return
+
+        if self._capture_depth:
+            if tag in self.BLOCK_TAGS:
+                self._append_caption_text(" ")
+            if tag not in self.VOID_TAGS:
+                self._capture_depth += 1
+            return
+
+        if tag == "figcaption" or classes.intersection(self.CAPTION_CLASSES):
+            self._capture_depth = 1
+            self._current_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        # Flushes a caption when its container closes.
+        if self._skip_depth:
+            self._skip_depth -= 1
+            return
+
+        if not self._capture_depth:
+            return
+        if tag in self.BLOCK_TAGS:
+            self._append_caption_text(" ")
+        self._capture_depth -= 1
+        if self._capture_depth <= 0:
+            self._flush_caption()
+
+    def handle_data(self, data: str) -> None:
+        # Collects visible caption text while inside a caption container.
+        if self._skip_depth or not self._capture_depth:
+            return
+        self._append_caption_text(data)
+
+    def _append_caption_text(self, text: str) -> None:
+        # Adds caption fragments before final normalization.
+        if self._current_parts is not None:
+            self._current_parts.append(text)
+
+    def _flush_caption(self) -> None:
+        # Normalizes one completed caption and stores it if useful.
+        if self._current_parts is None:
+            return
+        caption = clean_caption_text("".join(self._current_parts))
+        self._current_parts = None
+        self._capture_depth = 0
+        if caption:
+            self.captions.append(caption)
+
+
 class WikipediaReferencesParser(HTMLParser):
     """Extract numbered citation text from Wikipedia reference lists."""
 
@@ -636,6 +716,15 @@ class WikipediaReferencesParser(HTMLParser):
 
 def clean_reference_text(text: str) -> str:
     # Collapses citation whitespace and fixes punctuation spacing.
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    return text.strip()
+
+
+def clean_caption_text(text: str) -> str:
+    # Collapses caption whitespace and removes citation/editing residue.
+    text = INLINE_REFERENCE_PATTERN.sub("", text)
+    text = re.sub(r"\bedit\b", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     return text.strip()
@@ -1096,6 +1185,22 @@ def extract_references_from_html(html: str) -> str:
     if not parser.references:
         return ""
     return "== References ==\n\n" + "\n\n".join(parser.references)
+
+
+def extract_image_captions_from_html(html: str) -> list[str]:
+    # Extracts visible image/figure captions from rendered Wikipedia HTML.
+    parser = WikipediaCaptionParser()
+    parser.feed(html)
+    parser.close()
+    captions: list[str] = []
+    seen: set[str] = set()
+    for caption in parser.captions:
+        normalized = normalize_for_match(caption)
+        if len(normalized) < 25 or normalized in seen:
+            continue
+        seen.add(normalized)
+        captions.append(caption)
+    return captions
 
 
 def extract_reference_entries_from_html(html: str) -> dict[str, str]:
@@ -2399,6 +2504,109 @@ def references_heading_in_text(text: str) -> bool:
     )
 
 
+def starts_at_line_boundary(text: str, start: int) -> bool:
+    # Keeps caption removal conservative by requiring a line-start match.
+    line_start = text.rfind("\n", 0, start) + 1
+    return not text[line_start:start].strip()
+
+
+def remove_span_preserving_boundaries(text: str, start: int, end: int) -> str:
+    # Removes one matched copied-noise span while leaving surrounding prose intact.
+    while start > 0 and text[start - 1] in " \t":
+        start -= 1
+    while end < len(text) and text[end] in " \t":
+        end += 1
+    return text[:start] + text[end:]
+
+
+def strip_exact_caption_occurrences(text: str, caption: str) -> tuple[str, int]:
+    # Removes exact normalized caption matches that begin at a copied line boundary.
+    caption_normalized = normalize_for_match(caption)
+    if len(caption_normalized) < 40:
+        return text, 0
+    removed = 0
+    while True:
+        normalized_text, index_map = normalize_match_index_map(text)
+        normalized_start = normalized_text.find(caption_normalized)
+        matched_span: tuple[int, int] | None = None
+        while normalized_start >= 0:
+            start, end = original_span_from_normalized(
+                index_map,
+                normalized_start,
+                normalized_start + len(caption_normalized),
+            )
+            if starts_at_line_boundary(text, start):
+                matched_span = (start, end)
+                break
+            normalized_start = normalized_text.find(
+                caption_normalized, normalized_start + 1
+            )
+        if matched_span is None:
+            break
+        text = remove_span_preserving_boundaries(text, matched_span[0], matched_span[1])
+        removed += 1
+    return text, removed
+
+
+def line_spans(text: str) -> list[tuple[int, int]]:
+    # Returns line spans including their trailing newline where present.
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        spans.append((offset, offset + len(line)))
+        offset += len(line)
+    if not text.endswith(("\n", "\r")) and offset < len(text):
+        spans.append((offset, len(text)))
+    return spans
+
+
+def strip_fuzzy_caption_lines(text: str, caption: str) -> tuple[str, int]:
+    # Removes standalone lines that strongly match a known HTML caption.
+    caption_normalized = normalize_for_match(caption)
+    if len(caption_normalized) < 40:
+        return text, 0
+    removed = 0
+    for start, end in reversed(line_spans(text)):
+        line = text[start:end]
+        stripped = line.strip()
+        if len(normalize_for_match(stripped)) < 40:
+            continue
+        if token_overlap_score(stripped, caption) < 0.80:
+            continue
+        if hybrid_window_score(stripped, caption) < 0.94:
+            continue
+        text = remove_span_preserving_boundaries(text, start, end)
+        removed += 1
+    return text, removed
+
+
+def strip_copied_caption_phrases(
+    copied_text: str, captions: list[str] | None
+) -> tuple[str, int]:
+    # Removes known image captions from copied input before hybrid matching.
+    if not captions:
+        return copied_text, 0
+    unique_captions: list[str] = []
+    seen: set[str] = set()
+    for caption in sorted(captions, key=lambda value: len(normalize_for_match(value)), reverse=True):
+        normalized = normalize_for_match(caption)
+        if len(normalized) < 40 or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_captions.append(caption)
+
+    removed_total = 0
+    text = copied_text
+    for caption in unique_captions:
+        text, removed = strip_exact_caption_occurrences(text, caption)
+        if removed == 0:
+            text, removed = strip_fuzzy_caption_lines(text, caption)
+        removed_total += removed
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text, removed_total
+
+
 def reference_section_span(text: str) -> tuple[int, int] | None:
     # Finds a formatted References section inside already-cleaned text.
     headings = extract_heading_spans(text)
@@ -2609,11 +2817,16 @@ def extract_partial_hybrid_text(
     threshold: float = 0.84,
     references_mode: str = "none",
     reference_entries: dict[str, str] | None = None,
+    copied_image_captions: list[str] | None = None,
 ) -> HybridExtractionResult:
     # Uses heading/citation structural anchors plus sentence-window matching to slice clean text.
     if references_mode not in PARTIAL_REFERENCE_MODES:
         raise ValueError(f"Unsupported partial references mode: {references_mode}")
     clean_index = build_hybrid_text_index(clean_text)
+    copied_text, stripped_caption_count = strip_copied_caption_phrases(
+        copied_text,
+        copied_image_captions,
+    )
     copied_had_references_heading = references_heading_in_text(copied_text)
     copied_matching_text = strip_copied_ignored_sections(
         copied_text, clean_index.headings
@@ -2638,6 +2851,7 @@ def extract_partial_hybrid_text(
         f"Copied headings: {', '.join(h.title for h in copied_headings) or 'none'}",
         f"Matched headings: {', '.join(h.title for h in matched_headings) or 'none'}",
         f"Copied citations: {', '.join(copied_citations) or 'none'}",
+        f"Copied image captions stripped: {stripped_caption_count}",
         f"Copied References section ignored: {'yes' if copied_had_references_heading else 'no'}",
         f"References mode: {references_mode}",
     ]

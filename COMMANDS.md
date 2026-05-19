@@ -138,6 +138,7 @@ Optional custom input file:
 ## Partial Extraction: Hybrid Heading/Citation Method
 
 This is the newer partial extraction method. It uses headings, citation numbers, and sentence-window matching.
+It also reads image captions from the Wikipedia HTML and strips matching copied captions from the input before matching.
 
 Before running, paste copied Wikipedia text into:
 

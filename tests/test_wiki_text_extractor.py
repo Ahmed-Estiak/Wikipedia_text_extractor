@@ -1,4 +1,5 @@
 from pathlib import Path
+import csv
 import importlib.util
 import unittest
 
@@ -740,6 +741,17 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(args.min_coverage, 0.72)
         self.assertEqual(args.timeout, 1.0)
 
+    def test_partial_benchmark_cli_defaults_to_latex_math(self):
+        # Verifies the benchmark command defaults to one shared LaTeX-cleaned comparison run.
+        from benchmark_partial_methods import build_parser
+
+        args = build_parser().parse_args(["--url", "https://en.wikipedia.org/wiki/Kuiper_belt"])
+
+        self.assertEqual(args.math, "latex")
+        self.assertEqual(args.csv, "output/partial_method_benchmark.csv")
+        self.assertEqual(args.token_min_score, 0.72)
+        self.assertEqual(args.dmp_min_coverage, 0.72)
+
     def test_hybrid_index_extracts_headings_citations_and_references_boundary(self):
         # Verifies the hybrid index sees structural headings/citations but excludes final references.
         text = (
@@ -875,6 +887,28 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("Opening context", text)
         self.assertNotIn("Trailing context", text)
         self.assertIn("Start coverage:", report)
+
+    def test_partial_benchmark_appends_csv_rows(self):
+        # Verifies benchmark results append rows without rewriting earlier measurements.
+        from benchmark_partial_methods import CSV_FIELDS, append_benchmark_rows
+
+        path = Path("test_partial_benchmark.csv")
+        try:
+            first = {field: "" for field in CSV_FIELDS}
+            first.update({"run_id": "one", "method": "hybrid", "status": "ok"})
+            second = {field: "" for field in CSV_FIELDS}
+            second.update({"run_id": "two", "method": "token", "status": "ok"})
+
+            append_benchmark_rows(path, [first])
+            append_benchmark_rows(path, [second])
+
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual([row["run_id"] for row in rows], ["one", "two"])
+            self.assertEqual([row["method"] for row in rows], ["hybrid", "token"])
+        finally:
+            path.unlink(missing_ok=True)
 
 
     def test_sentence_window_chunks_step_three_with_tail_backfill(self):
@@ -1756,6 +1790,12 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(
             partial_dmp_report_path("output/kuiper_belt.txt", page),
             Path("output/Kuiper_belt/English/partial_dmp_match_report.txt"),
+        )
+        from benchmark_partial_methods import benchmark_csv_path
+
+        self.assertEqual(
+            benchmark_csv_path("output/partial_method_benchmark.csv", page),
+            Path("output/Kuiper_belt/English/kuiper_belt_partial_benchmark.csv"),
         )
         self.assertEqual(
             partial_token_output_path("output/kuiper_belt.txt", page),

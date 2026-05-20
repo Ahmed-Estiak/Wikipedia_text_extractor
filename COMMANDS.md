@@ -186,6 +186,28 @@ output\Large_language_model\English\partial_dmp_text.txt
 output\Large_language_model\English\partial_dmp_match_report.txt
 ```
 
+## Partial Method Runtime Benchmark CSV
+
+Run hybrid, token, and DMP consecutively against the same pasted input and append three rows to a CSV file. Fetch and clean are shared once; each row records the method-specific match runtime and estimated full runtime.
+
+```cmd
+.venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model"
+```
+
+CSV output:
+
+```text
+output\Large_language_model\English\large_language_model_partial_benchmark.csv
+```
+
+Run it again after changing `input_text\partial_input.txt`; the next benchmark rows will be appended below the old rows.
+
+Tune benchmark settings:
+
+```cmd
+.venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model" --token-min-score 0.72 --dmp-min-coverage 0.72 --dmp-anchor-chars 600
+```
+
 ## Debug Reports To Keep
 
 The partial hybrid match report is important for debugging and should be kept:

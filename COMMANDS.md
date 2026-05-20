@@ -208,6 +208,8 @@ output\Large_language_model\English\partial_benchmark_token_text.txt
 output\Large_language_model\English\partial_benchmark_dmp_text.txt
 ```
 
+If one method fails, its text file is still overwritten with a readable error report instead of being left missing.
+
 Run it again after changing `input_text\partial_input.txt`; the next benchmark rows will be appended below the old rows.
 
 Tune benchmark settings:

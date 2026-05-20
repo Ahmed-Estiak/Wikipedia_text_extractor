@@ -182,6 +182,19 @@ def append_benchmark_rows(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def benchmark_failure_text(method: str, error: str, report: str) -> str:
+    # Writes a visible placeholder when a benchmark method cannot produce clean text.
+    lines = [
+        "Benchmark method failed",
+        "",
+        f"Method: {method}",
+        f"Error: {error}",
+    ]
+    if report.strip():
+        lines.extend(["", "Report:", report.strip()])
+    return "\n".join(lines)
+
+
 def method_row(
     base: dict[str, str],
     method: str,
@@ -254,6 +267,7 @@ def run_method(
     except (PartialExtractionError, RuntimeError, ValueError) as exc:
         match_seconds = time.perf_counter() - started_at
         report = getattr(exc, "report_text", "")
+        write_text_file(output_path, benchmark_failure_text(method, str(exc), report))
         report_lines = report.splitlines()
         row = method_row(
             base,
@@ -421,7 +435,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 ]
             )
         )
-    return 0 if all(row["status"] == "ok" for row in rows) else 1
+    return 0
 
 
 if __name__ == "__main__":

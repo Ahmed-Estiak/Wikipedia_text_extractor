@@ -910,6 +910,38 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_partial_benchmark_writes_error_text_on_method_failure(self):
+        # Verifies failed benchmark methods still create a readable text file.
+        from benchmark_partial_methods import CSV_FIELDS, run_method
+
+        path = Path("test_benchmark_error.txt")
+
+        def failing_runner():
+            raise PartialExtractionError("boundary failed", "Debug report\n\nfailed boundary")
+
+        try:
+            row, text = run_method(
+                "token",
+                failing_runner,
+                {field: "" for field in CSV_FIELDS},
+                0.1,
+                0.2,
+                "hybrid text",
+                "settings",
+                path,
+            )
+
+            self.assertEqual(row["status"], "error")
+            self.assertIsNone(text)
+            self.assertTrue(path.exists())
+            error_text = path.read_text(encoding="utf-8")
+            self.assertIn("Benchmark method failed", error_text)
+            self.assertIn("Method: token", error_text)
+            self.assertIn("boundary failed", error_text)
+            self.assertIn("Debug report", error_text)
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_partial_benchmark_clears_text_outputs(self):
         # Verifies benchmark text outputs are removed before the next run writes fresh files.
         from benchmark_partial_methods import (

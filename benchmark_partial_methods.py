@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--token-window",
         type=int,
-        default=120,
+        default=60,
         help="Token matcher start/end anchor token count",
     )
     parser.add_argument(

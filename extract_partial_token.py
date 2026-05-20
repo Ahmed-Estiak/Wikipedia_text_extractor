@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--window-tokens",
         type=int,
-        default=120,
+        default=60,
         help="Number of pasted start/end tokens used as boundary anchors",
     )
     parser.add_argument(

@@ -211,6 +211,15 @@ class TokenExtractionResult:
     end_match: TokenAnchorMatch
 
 
+@dataclass(frozen=True)
+class TokenBoundaryMatch:
+    # Records which copied token chunk produced a clean boundary match.
+    match: TokenAnchorMatch
+    copied_start_token: int
+    copied_end_token: int
+    chunks_checked: int
+
+
 class PartialExtractionError(ValueError):
     """Raised when pasted text cannot be matched reliably enough."""
 
@@ -2024,14 +2033,18 @@ def ordered_token_coverage(anchor_tokens: list[str], candidate_tokens: list[str]
     # Measures how much of the pasted anchor appears in the same order.
     if not anchor_tokens or not candidate_tokens:
         return 0.0
-    anchor_index = 0
+    candidate_index = 0
     matched = 0
-    for token in candidate_tokens:
-        if token == anchor_tokens[anchor_index]:
+    for anchor_token in anchor_tokens:
+        search_index = candidate_index
+        while (
+            search_index < len(candidate_tokens)
+            and candidate_tokens[search_index] != anchor_token
+        ):
+            search_index += 1
+        if search_index < len(candidate_tokens):
             matched += 1
-            anchor_index += 1
-            if anchor_index >= len(anchor_tokens):
-                break
+            candidate_index = search_index + 1
     return matched / len(anchor_tokens)
 
 
@@ -2041,6 +2054,35 @@ def meaningful_anchor_tokens(tokens: list[TextToken], side: str, window_tokens: 
     if len(values) <= window_tokens:
         return values
     return values[:window_tokens] if side == "start" else values[-window_tokens:]
+
+
+def token_anchor_chunks(
+    tokens: list[TextToken], side: str, window_tokens: int
+) -> list[tuple[int, int, list[str]]]:
+    # Splits copied tokens into non-overlapping 60-token-style boundary chunks.
+    values = [token.value for token in tokens]
+    if not values:
+        return []
+    if len(values) <= window_tokens:
+        return [(0, len(values), values)]
+
+    chunks: list[tuple[int, int, list[str]]] = []
+    if side == "start":
+        start = 0
+        while start < len(values):
+            end = min(len(values), start + window_tokens)
+            if end - start >= 8:
+                chunks.append((start, end, values[start:end]))
+            start += window_tokens
+        return chunks
+
+    end = len(values)
+    while end > 0:
+        start = max(0, end - window_tokens)
+        if end - start >= 8:
+            chunks.append((start, end, values[start:end]))
+        end = start
+    return chunks
 
 
 def rare_anchor_token_positions(
@@ -2145,6 +2187,7 @@ def find_token_anchor_match(
     confirm_mode: str = "none",
     tie_margin: float = 0.03,
     min_start_token: int = 0,
+    max_end_token: int | None = None,
     tie_preference: str = "first",
 ) -> TokenAnchorMatch | None:
     # Finds one token anchor using inverted-index candidates and ordered-token scoring.
@@ -2168,6 +2211,8 @@ def find_token_anchor_match(
             candidate_start,
             frequencies,
         )
+        if max_end_token is not None and candidate_end > max_end_token:
+            continue
         if score >= min_score:
             scored.append((score, overlap, ordered, candidate_start, candidate_end, None, False))
     if not scored:
@@ -2200,6 +2245,134 @@ def find_token_anchor_match(
         candidates_checked=len(candidate_starts),
         confirm_used=confirm_used,
     )
+
+
+def find_token_boundary_match(
+    clean_tokens: list[TextToken],
+    copied_chunks: list[tuple[int, int, list[str]]],
+    inverted_index: dict[str, list[int]],
+    frequencies: Counter[str],
+    min_score: float,
+    max_candidates: int,
+    confirm_mode: str,
+    min_start_token: int = 0,
+    max_end_token: int | None = None,
+    tie_preference: str = "first",
+) -> TokenBoundaryMatch | None:
+    # Finds the first copied token chunk with a reliable clean token match.
+    for index, (copied_start, copied_end, anchor_tokens) in enumerate(copied_chunks):
+        match = find_token_anchor_match(
+            clean_tokens,
+            anchor_tokens,
+            inverted_index,
+            frequencies,
+            min_score,
+            max_candidates=max_candidates,
+            confirm_mode=confirm_mode,
+            min_start_token=min_start_token,
+            max_end_token=max_end_token,
+            tie_preference=tie_preference,
+        )
+        if match is not None:
+            return TokenBoundaryMatch(
+                match=match,
+                copied_start_token=copied_start,
+                copied_end_token=copied_end,
+                chunks_checked=index + 1,
+            )
+    return None
+
+
+def refine_token_start_boundary(
+    boundary: TokenBoundaryMatch,
+    copied_chunks_start_order: list[tuple[int, int, list[str]]],
+    clean_tokens: list[TextToken],
+    inverted_index: dict[str, list[int]],
+    frequencies: Counter[str],
+    min_score: float,
+    max_candidates: int,
+    confirm_mode: str,
+    max_failures: int = 2,
+) -> TokenBoundaryMatch:
+    # Walks backward over earlier copied chunks to recover text before the first strong chunk.
+    current = boundary
+    failures = 0
+    previous_chunks = [
+        chunk
+        for chunk in copied_chunks_start_order
+        if chunk[1] <= current.copied_start_token
+    ]
+    for copied_start, copied_end, anchor_tokens in reversed(previous_chunks):
+        if failures >= max_failures:
+            break
+        match = find_token_anchor_match(
+            clean_tokens,
+            anchor_tokens,
+            inverted_index,
+            frequencies,
+            min_score,
+            max_candidates=max_candidates,
+            confirm_mode=confirm_mode,
+            max_end_token=current.match.start_token,
+            tie_preference="last",
+        )
+        if match is None:
+            failures += 1
+            continue
+        current = TokenBoundaryMatch(
+            match=match,
+            copied_start_token=copied_start,
+            copied_end_token=copied_end,
+            chunks_checked=current.chunks_checked + 1,
+        )
+        failures = 0
+    return current
+
+
+def refine_token_end_boundary(
+    boundary: TokenBoundaryMatch,
+    copied_chunks_start_order: list[tuple[int, int, list[str]]],
+    clean_tokens: list[TextToken],
+    inverted_index: dict[str, list[int]],
+    frequencies: Counter[str],
+    min_score: float,
+    max_candidates: int,
+    confirm_mode: str,
+    max_failures: int = 2,
+) -> TokenBoundaryMatch:
+    # Walks forward over later copied chunks to extend the end until copied-only noise begins.
+    current = boundary
+    failures = 0
+    next_chunks = [
+        chunk
+        for chunk in copied_chunks_start_order
+        if chunk[0] >= current.copied_end_token
+    ]
+    for copied_start, copied_end, anchor_tokens in next_chunks:
+        if failures >= max_failures:
+            break
+        match = find_token_anchor_match(
+            clean_tokens,
+            anchor_tokens,
+            inverted_index,
+            frequencies,
+            min_score,
+            max_candidates=max_candidates,
+            confirm_mode=confirm_mode,
+            min_start_token=current.match.end_token,
+            tie_preference="first",
+        )
+        if match is None:
+            failures += 1
+            continue
+        current = TokenBoundaryMatch(
+            match=match,
+            copied_start_token=copied_start,
+            copied_end_token=copied_end,
+            chunks_checked=current.chunks_checked + 1,
+        )
+        failures = 0
+    return current
 
 
 def hybrid_window_score(left: str, right: str) -> float:
@@ -3141,7 +3314,7 @@ def snap_end_to_sentence(sentences: list[TextSentence], end: int) -> int:
 def extract_partial_token_text(
     clean_text: str,
     copied_text: str,
-    window_tokens: int = 120,
+    window_tokens: int = 60,
     min_score: float = 0.72,
     confirm_mode: str = "none",
     max_candidates: int = 240,
@@ -3199,12 +3372,12 @@ def extract_partial_token_text(
 
     inverted_index = build_token_inverted_index(clean_tokens)
     frequencies: Counter[str] = Counter(token.value for token in clean_tokens)
-    start_anchor_tokens = meaningful_anchor_tokens(copied_tokens, "start", window_tokens)
-    end_anchor_tokens = meaningful_anchor_tokens(copied_tokens, "end", window_tokens)
+    copied_chunks_start_order = token_anchor_chunks(copied_tokens, "start", window_tokens)
+    copied_chunks_end_order = token_anchor_chunks(copied_tokens, "end", window_tokens)
 
-    start_match = find_token_anchor_match(
+    start_boundary = find_token_boundary_match(
         clean_tokens,
-        start_anchor_tokens,
+        copied_chunks_start_order,
         inverted_index,
         frequencies,
         min_score,
@@ -3212,7 +3385,7 @@ def extract_partial_token_text(
         confirm_mode=confirm_mode,
         tie_preference="first",
     )
-    if start_match is None:
+    if start_boundary is None:
         message = "failed: token start boundary did not meet the minimum score"
         report = "\n".join(
             [
@@ -3221,22 +3394,33 @@ def extract_partial_token_text(
                 message,
                 f"Minimum score: {min_score:.3f}",
                 f"Copied tokens: {len(copied_tokens)}",
+                f"Copied token chunks checked: {len(copied_chunks_start_order)}",
             ]
         )
         raise PartialExtractionError(message, report)
-
-    end_match = find_token_anchor_match(
+    start_boundary = refine_token_start_boundary(
+        start_boundary,
+        copied_chunks_start_order,
         clean_tokens,
-        end_anchor_tokens,
+        inverted_index,
+        frequencies,
+        min_score,
+        max_candidates,
+        confirm_mode,
+    )
+
+    end_boundary = find_token_boundary_match(
+        clean_tokens,
+        copied_chunks_end_order,
         inverted_index,
         frequencies,
         min_score,
         max_candidates=max_candidates,
         confirm_mode=confirm_mode,
-        min_start_token=start_match.start_token,
+        min_start_token=start_boundary.match.start_token,
         tie_preference="last",
     )
-    if end_match is None:
+    if end_boundary is None:
         message = "failed: token end boundary did not meet the minimum score"
         report = "\n".join(
             [
@@ -3244,11 +3428,24 @@ def extract_partial_token_text(
                 "",
                 message,
                 f"Minimum score: {min_score:.3f}",
-                f"Start token: {start_match.start_token}",
+                f"Start token: {start_boundary.match.start_token}",
+                f"Copied token chunks checked: {len(copied_chunks_end_order)}",
             ]
         )
         raise PartialExtractionError(message, report)
+    end_boundary = refine_token_end_boundary(
+        end_boundary,
+        copied_chunks_start_order,
+        clean_tokens,
+        inverted_index,
+        frequencies,
+        min_score,
+        max_candidates,
+        confirm_mode,
+    )
 
+    start_match = start_boundary.match
+    end_match = end_boundary.match
     start = snap_start_to_sentence(clean_index.sentences, start_match.start)
     end = snap_end_to_sentence(clean_index.sentences, end_match.end)
     if start >= end:
@@ -3279,11 +3476,17 @@ def extract_partial_token_text(
         f"Minimum score: {min_score:.3f}",
         f"Confirm mode: {confirm_mode}",
         f"Copied image captions stripped: {stripped_caption_count}",
+        f"Copied token chunks: {len(copied_chunks_start_order)}",
+        f"Start copied token chunk: {start_boundary.copied_start_token}-{start_boundary.copied_end_token}",
+        f"Start chunks checked/refined: {start_boundary.chunks_checked}",
         f"Start token score: {start_match.score:.3f}",
         f"Start overlap: {start_match.overlap_score:.3f}",
         f"Start ordered coverage: {start_match.ordered_score:.3f}",
         f"Start candidates checked: {start_match.candidates_checked}",
         f"Start fuzzy confirm: {start_match.fuzzy_score:.3f}" if start_match.fuzzy_score is not None else "Start fuzzy confirm: none",
+        f"End copied token chunk: {end_boundary.copied_start_token}-{end_boundary.copied_end_token}",
+        f"End chunks checked/refined: {end_boundary.chunks_checked}",
+        f"End tail unmatched: {'yes' if end_boundary.copied_end_token < len(copied_tokens) else 'no'}",
         f"End token score: {end_match.score:.3f}",
         f"End overlap: {end_match.overlap_score:.3f}",
         f"End ordered coverage: {end_match.ordered_score:.3f}",

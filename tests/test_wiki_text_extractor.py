@@ -729,7 +729,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(args.math, "latex")
         self.assertEqual(args.confirm, "none")
-        self.assertEqual(args.window_tokens, 120)
+        self.assertEqual(args.window_tokens, 60)
 
     def test_partial_dmp_cli_defaults_to_latex_math(self):
         # Verifies DMP partial defaults keep LaTeX math and use a bounded diff timeout.
@@ -749,6 +749,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(args.math, "latex")
         self.assertEqual(args.csv, "output/partial_method_benchmark.csv")
+        self.assertEqual(args.token_window, 60)
         self.assertEqual(args.token_min_score, 0.72)
         self.assertEqual(args.dmp_min_coverage, 0.72)
 
@@ -853,6 +854,59 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Selected token passage starts", result.text)
         self.assertNotIn("Caption noise copied", result.text)
         self.assertIn("Copied image captions stripped: 2", result.report)
+
+    def test_token_partial_handles_mid_word_start_with_ordered_overlap(self):
+        # Verifies a copied start inside a word can still recover the full clean sentence.
+        clean = (
+            "Lead context stays outside.\n\n"
+            "Unlike hard weights, which are computed during the backwards training pass, "
+            "soft weights exist only in the forward pass and change with every input step. "
+            "Earlier designs implemented attention in a recurrent neural network system."
+        )
+        copied = (
+            "ckwards training pass, soft weights exist only in the forward pass and "
+            "change with every input step. Earlier designs implemented attention in "
+            "a recurrent neural network system."
+        )
+
+        result = extract_partial_token_text(
+            clean,
+            copied,
+            window_tokens=20,
+            min_score=0.72,
+        )
+
+        self.assertTrue(result.text.startswith("Unlike hard weights"))
+        self.assertIn("backwards training pass", result.text)
+        self.assertIn("Start copied token chunk: 0-20", result.report)
+
+    def test_token_partial_scans_back_from_unmatched_tail_chunks(self):
+        # Verifies copied-only table/timeline tail chunks do not make token extraction fail.
+        clean = (
+            "Opening context stays outside.\n\n"
+            "The attention mechanism assigns soft weights to relevant sequence elements. "
+            "These weights let each token access useful information from earlier positions. "
+            "This selected prose is present in the clean article and should be extracted."
+        )
+        copied = (
+            "The attention mechanism assigns soft weights to relevant sequence elements. "
+            "These weights let each token access useful information from earlier positions. "
+            "This selected prose is present in the clean article and should be extracted. "
+            "1950s psychology biology attention cocktail party table row. "
+            "1980s sigma pi units higher order neural networks table row. "
+            "2017 transformer equation softmax q k t dk v table row."
+        )
+
+        result = extract_partial_token_text(
+            clean,
+            copied,
+            window_tokens=20,
+            min_score=0.72,
+        )
+
+        self.assertIn("This selected prose is present", result.text)
+        self.assertNotIn("1950s psychology", result.text)
+        self.assertIn("End tail unmatched: yes", result.report)
 
     def test_dmp_partial_extraction_uses_diff_equal_blocks_when_available(self):
         # Verifies optional DMP matching can derive a clean span from copied text.

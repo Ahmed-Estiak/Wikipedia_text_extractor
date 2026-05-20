@@ -2085,6 +2085,23 @@ def token_anchor_chunks(
     return chunks
 
 
+def token_chunks_in_range(
+    tokens: list[TextToken], start_token: int, end_token: int, chunk_tokens: int
+) -> list[tuple[int, int, list[str]]]:
+    # Builds non-overlapping refinement chunks inside one copied-token range.
+    values = [token.value for token in tokens]
+    start_token = max(0, min(start_token, len(values)))
+    end_token = max(start_token, min(end_token, len(values)))
+    chunks: list[tuple[int, int, list[str]]] = []
+    start = start_token
+    while start < end_token:
+        end = min(end_token, start + chunk_tokens)
+        if end - start >= 8:
+            chunks.append((start, end, values[start:end]))
+        start = end
+    return chunks
+
+
 def rare_anchor_token_positions(
     anchor_tokens: list[str],
     inverted_index: dict[str, list[int]],
@@ -2285,23 +2302,25 @@ def find_token_boundary_match(
 
 def refine_token_start_boundary(
     boundary: TokenBoundaryMatch,
-    copied_chunks_start_order: list[tuple[int, int, list[str]]],
+    copied_tokens: list[TextToken],
     clean_tokens: list[TextToken],
     inverted_index: dict[str, list[int]],
     frequencies: Counter[str],
     min_score: float,
     max_candidates: int,
     confirm_mode: str,
+    refine_tokens: int,
     max_failures: int = 2,
 ) -> TokenBoundaryMatch:
     # Walks backward over earlier copied chunks to recover text before the first strong chunk.
     current = boundary
     failures = 0
-    previous_chunks = [
-        chunk
-        for chunk in copied_chunks_start_order
-        if chunk[1] <= current.copied_start_token
-    ]
+    previous_chunks = token_chunks_in_range(
+        copied_tokens,
+        0,
+        current.copied_start_token,
+        refine_tokens,
+    )
     for copied_start, copied_end, anchor_tokens in reversed(previous_chunks):
         if failures >= max_failures:
             break
@@ -2331,23 +2350,25 @@ def refine_token_start_boundary(
 
 def refine_token_end_boundary(
     boundary: TokenBoundaryMatch,
-    copied_chunks_start_order: list[tuple[int, int, list[str]]],
+    copied_tokens: list[TextToken],
     clean_tokens: list[TextToken],
     inverted_index: dict[str, list[int]],
     frequencies: Counter[str],
     min_score: float,
     max_candidates: int,
     confirm_mode: str,
+    refine_tokens: int,
     max_failures: int = 2,
 ) -> TokenBoundaryMatch:
     # Walks forward over later copied chunks to extend the end until copied-only noise begins.
     current = boundary
     failures = 0
-    next_chunks = [
-        chunk
-        for chunk in copied_chunks_start_order
-        if chunk[0] >= current.copied_end_token
-    ]
+    next_chunks = token_chunks_in_range(
+        copied_tokens,
+        current.copied_end_token,
+        len(copied_tokens),
+        refine_tokens,
+    )
     for copied_start, copied_end, anchor_tokens in next_chunks:
         if failures >= max_failures:
             break
@@ -3315,6 +3336,7 @@ def extract_partial_token_text(
     clean_text: str,
     copied_text: str,
     window_tokens: int = 60,
+    refine_tokens: int = 20,
     min_score: float = 0.72,
     confirm_mode: str = "none",
     max_candidates: int = 240,
@@ -3325,6 +3347,8 @@ def extract_partial_token_text(
         raise ValueError(f"Unsupported token confirm mode: {confirm_mode}")
     if window_tokens < 20:
         raise ValueError("window_tokens must be at least 20")
+    if refine_tokens < 8:
+        raise ValueError("refine_tokens must be at least 8")
 
     clean_index = build_hybrid_text_index(clean_text)
     copied_text, stripped_caption_count = strip_copied_caption_phrases(
@@ -3400,13 +3424,14 @@ def extract_partial_token_text(
         raise PartialExtractionError(message, report)
     start_boundary = refine_token_start_boundary(
         start_boundary,
-        copied_chunks_start_order,
+        copied_tokens,
         clean_tokens,
         inverted_index,
         frequencies,
         min_score,
         max_candidates,
         confirm_mode,
+        refine_tokens,
     )
 
     end_boundary = find_token_boundary_match(
@@ -3435,13 +3460,14 @@ def extract_partial_token_text(
         raise PartialExtractionError(message, report)
     end_boundary = refine_token_end_boundary(
         end_boundary,
-        copied_chunks_start_order,
+        copied_tokens,
         clean_tokens,
         inverted_index,
         frequencies,
         min_score,
         max_candidates,
         confirm_mode,
+        refine_tokens,
     )
 
     start_match = start_boundary.match
@@ -3473,6 +3499,7 @@ def extract_partial_token_text(
         f"Copied tokens: {len(copied_tokens)}",
         f"Clean tokens: {len(clean_tokens)}",
         f"Window tokens: {min(window_tokens, len(copied_tokens))}",
+        f"Refine tokens: {min(refine_tokens, len(copied_tokens))}",
         f"Minimum score: {min_score:.3f}",
         f"Confirm mode: {confirm_mode}",
         f"Copied image captions stripped: {stripped_caption_count}",

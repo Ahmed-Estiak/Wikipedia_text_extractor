@@ -730,6 +730,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(args.math, "latex")
         self.assertEqual(args.confirm, "none")
         self.assertEqual(args.window_tokens, 60)
+        self.assertEqual(args.refine_tokens, 20)
 
     def test_partial_dmp_cli_defaults_to_latex_math(self):
         # Verifies DMP partial defaults keep LaTeX math and use a bounded diff timeout.
@@ -750,6 +751,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(args.math, "latex")
         self.assertEqual(args.csv, "output/partial_method_benchmark.csv")
         self.assertEqual(args.token_window, 60)
+        self.assertEqual(args.token_refine_tokens, 20)
         self.assertEqual(args.token_min_score, 0.72)
         self.assertEqual(args.dmp_min_coverage, 0.72)
 
@@ -878,6 +880,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertTrue(result.text.startswith("Unlike hard weights"))
         self.assertIn("backwards training pass", result.text)
+        self.assertIn("Refine tokens: 20", result.report)
         self.assertIn("Start copied token chunk: 0-20", result.report)
 
     def test_token_partial_scans_back_from_unmatched_tail_chunks(self):
@@ -906,7 +909,34 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertIn("This selected prose is present", result.text)
         self.assertNotIn("1950s psychology", result.text)
+        self.assertIn("Refine tokens: 20", result.report)
         self.assertIn("End tail unmatched: yes", result.report)
+
+    def test_token_partial_forward_refine_uses_twenty_token_chunks(self):
+        # Verifies a 60-token end match can extend through later 20-token refinement chunks.
+        clean = (
+            "Opening context stays outside.\n\n"
+            "Alpha beta gamma delta epsilon zeta eta theta iota kappa. "
+            "Lambda mu nu xi omicron pi rho sigma tau upsilon. "
+            "Phi chi psi omega attention tokens continue with useful final prose."
+        )
+        copied = (
+            "Alpha beta gamma delta epsilon zeta eta theta iota kappa. "
+            "Lambda mu nu xi omicron pi rho sigma tau upsilon. "
+            "Phi chi psi omega attention tokens continue with useful final prose."
+        )
+
+        result = extract_partial_token_text(
+            clean,
+            copied,
+            window_tokens=20,
+            refine_tokens=10,
+            min_score=0.72,
+        )
+
+        self.assertIn("useful final prose", result.text)
+        self.assertIn("Refine tokens: 10", result.report)
+        self.assertIn("End tail unmatched: no", result.report)
 
     def test_dmp_partial_extraction_uses_diff_equal_blocks_when_available(self):
         # Verifies optional DMP matching can derive a clean span from copied text.

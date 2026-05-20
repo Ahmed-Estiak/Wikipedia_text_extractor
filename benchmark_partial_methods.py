@@ -94,6 +94,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Token matcher start/end anchor token count",
     )
     parser.add_argument(
+        "--token-refine-tokens",
+        type=int,
+        default=20,
+        help="Token matcher backward/forward refinement chunk token count",
+    )
+    parser.add_argument(
         "--token-min-score",
         type=float,
         default=0.72,
@@ -353,6 +359,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 full_text,
                 pasted_text,
                 window_tokens=args.token_window,
+                refine_tokens=args.token_refine_tokens,
                 min_score=args.token_min_score,
                 confirm_mode="none",
                 max_candidates=args.token_max_candidates,
@@ -374,7 +381,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             clean_seconds,
             hybrid_text,
             (
-                f"window={args.token_window};min_score={args.token_min_score:.3f};"
+                f"window={args.token_window};refine={args.token_refine_tokens};min_score={args.token_min_score:.3f};"
                 f"max_candidates={args.token_max_candidates};confirm=none"
             ),
             text_output_paths["token"],

@@ -62,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of pasted start/end tokens used as boundary anchors",
     )
     parser.add_argument(
+        "--refine-tokens",
+        type=int,
+        default=20,
+        help="Number of copied tokens per backward/forward refinement chunk",
+    )
+    parser.add_argument(
         "--min-score",
         type=float,
         default=0.72,
@@ -122,6 +128,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             full_text,
             pasted_text,
             window_tokens=args.window_tokens,
+            refine_tokens=args.refine_tokens,
             min_score=args.min_score,
             confirm_mode=args.confirm,
             max_candidates=args.max_candidates,

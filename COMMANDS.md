@@ -147,10 +147,10 @@ Use optional fuzzy confirmation only when several token candidates are very clos
 Tune the token anchor size and minimum score:
 
 ```cmd
-.venv\Scripts\python.exe extract_partial_token.py --url "https://en.wikipedia.org/wiki/Large_language_model" --window-tokens 60 --min-score 0.72
+.venv\Scripts\python.exe extract_partial_token.py --url "https://en.wikipedia.org/wiki/Large_language_model" --window-tokens 60 --refine-tokens 20 --min-score 0.72
 ```
 
-The token method scans copied start/end text in non-overlapping token chunks, using `60` tokens by default.
+The token method scans copied start/end text in non-overlapping token chunks, using `60` tokens by default. Start backward refinement and end forward refinement use `20`-token chunks by default.
 
 Token method outputs:
 
@@ -217,7 +217,7 @@ Run it again after changing `input_text\partial_input.txt`; the next benchmark r
 Tune benchmark settings:
 
 ```cmd
-.venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model" --token-window 60 --token-min-score 0.72 --dmp-min-coverage 0.72 --dmp-anchor-chars 600
+.venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model" --token-window 60 --token-refine-tokens 20 --token-min-score 0.72 --dmp-min-coverage 0.72 --dmp-anchor-chars 600
 ```
 
 ## Debug Reports To Keep

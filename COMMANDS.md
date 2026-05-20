@@ -188,7 +188,7 @@ output\Large_language_model\English\partial_dmp_match_report.txt
 
 ## Partial Method Runtime Benchmark CSV
 
-Run hybrid, token, and DMP consecutively against the same pasted input and append three rows to a CSV file. Fetch and clean are shared once; each row records the method-specific match runtime and estimated full runtime.
+Run hybrid, token, and DMP consecutively against the same pasted input. The three clean text files are overwritten fresh on each run, while three timing rows are appended to the CSV file. Fetch and clean are shared once; each CSV row records the method-specific match runtime and estimated full runtime.
 
 ```cmd
 .venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model"
@@ -198,6 +198,14 @@ CSV output:
 
 ```text
 output\Large_language_model\English\large_language_model_partial_benchmark.csv
+```
+
+Clean text outputs overwritten on every run:
+
+```text
+output\Large_language_model\English\partial_benchmark_hybrid_text.txt
+output\Large_language_model\English\partial_benchmark_token_text.txt
+output\Large_language_model\English\partial_benchmark_dmp_text.txt
 ```
 
 Run it again after changing `input_text\partial_input.txt`; the next benchmark rows will be appended below the old rows.

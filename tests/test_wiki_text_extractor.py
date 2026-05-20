@@ -910,6 +910,36 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_partial_benchmark_clears_text_outputs(self):
+        # Verifies benchmark text outputs are removed before the next run writes fresh files.
+        from benchmark_partial_methods import (
+            benchmark_text_output_path,
+            clear_benchmark_text_outputs,
+        )
+
+        page = PageRequest("Benchmark topic", "en")
+        paths = [
+            benchmark_text_output_path("test_benchmark_outputs/result.txt", page, method)
+            for method in ("hybrid", "token", "dmp")
+        ]
+        try:
+            for path in paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("stale", encoding="utf-8")
+
+            returned = clear_benchmark_text_outputs("test_benchmark_outputs/result.txt", page)
+
+            self.assertEqual(set(returned), {"hybrid", "token", "dmp"})
+            self.assertTrue(all(not path.exists() for path in paths))
+        finally:
+            for path in paths:
+                path.unlink(missing_ok=True)
+            root = Path("test_benchmark_outputs")
+            for child in sorted(root.glob("**/*"), reverse=True):
+                if child.is_dir():
+                    child.rmdir()
+            root.rmdir() if root.exists() else None
+
 
     def test_sentence_window_chunks_step_three_with_tail_backfill(self):
         # Verifies copied chunks step by three sentences and backfill short tails to three.
@@ -1791,11 +1821,15 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             partial_dmp_report_path("output/kuiper_belt.txt", page),
             Path("output/Kuiper_belt/English/partial_dmp_match_report.txt"),
         )
-        from benchmark_partial_methods import benchmark_csv_path
+        from benchmark_partial_methods import benchmark_csv_path, benchmark_text_output_path
 
         self.assertEqual(
             benchmark_csv_path("output/partial_method_benchmark.csv", page),
             Path("output/Kuiper_belt/English/kuiper_belt_partial_benchmark.csv"),
+        )
+        self.assertEqual(
+            benchmark_text_output_path("output/partial_method_benchmark.csv", page, "hybrid"),
+            Path("output/Kuiper_belt/English/partial_benchmark_hybrid_text.txt"),
         )
         self.assertEqual(
             partial_token_output_path("output/kuiper_belt.txt", page),

@@ -25,6 +25,7 @@ from wiki_text_extractor import (
     output_directory,
     page_request_from_url,
     topic_file_stem,
+    write_text_file,
 )
 
 
@@ -143,6 +144,22 @@ def benchmark_csv_path(output: str, page: PageRequest) -> Path:
     return output_directory(output, page) / f"{topic_file_stem(page)}_partial_benchmark{suffix}"
 
 
+def benchmark_text_output_path(output: str, page: PageRequest, method: str) -> Path:
+    # Stores the latest benchmark clean text for one method; each run overwrites it.
+    return output_directory(output, page) / f"partial_benchmark_{method}_text.txt"
+
+
+def clear_benchmark_text_outputs(output: str, page: PageRequest) -> dict[str, Path]:
+    # Removes stale benchmark text files before a new three-method run starts.
+    paths = {
+        method: benchmark_text_output_path(output, page, method)
+        for method in ("hybrid", "token", "dmp")
+    }
+    for path in paths.values():
+        path.unlink(missing_ok=True)
+    return paths
+
+
 def text_hash(text: str) -> str:
     # Short hash keeps CSV readable while still flagging output/input changes.
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
@@ -211,11 +228,13 @@ def run_method(
     clean_seconds: float,
     hybrid_text: str | None,
     settings: str,
+    output_path: Path,
 ) -> tuple[dict[str, str], str | None]:
     # Times one matcher and converts success/failure into a CSV row.
     started_at = time.perf_counter()
     try:
         text, start_offset, end_offset, score_summary, _report = runner()
+        write_text_file(output_path, text)
         match_seconds = time.perf_counter() - started_at
         row = method_row(
             base,
@@ -257,6 +276,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
     input_path = Path(args.input)
     csv_path = benchmark_csv_path(args.csv, page)
+    text_output_paths = clear_benchmark_text_outputs(args.csv, page)
 
     try:
         pasted_text = read_pasted_text(input_path)
@@ -311,6 +331,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             clean_seconds,
             None,
             f"threshold={args.hybrid_threshold:.3f};references=none",
+            text_output_paths["hybrid"],
         )
 
         def run_token() -> tuple[str, str, str, str, str]:
@@ -342,6 +363,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 f"window={args.token_window};min_score={args.token_min_score:.3f};"
                 f"max_candidates={args.token_max_candidates};confirm=none"
             ),
+            text_output_paths["token"],
         )
 
         def run_dmp() -> tuple[str, str, str, str, str]:
@@ -372,6 +394,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 f"min_coverage={args.dmp_min_coverage:.3f};"
                 f"anchor_chars={args.dmp_anchor_chars};timeout={args.dmp_timeout:.3f}"
             ),
+            text_output_paths["dmp"],
         )
 
         rows = [hybrid_row, token_row, dmp_row]
@@ -381,6 +404,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 1
 
     print(f"Appended benchmark rows: {csv_path}")
+    print("Updated benchmark text files:")
+    for method, path in text_output_paths.items():
+        if path.exists():
+            print(f"{method}: {path}")
     print("method,status,match_seconds,estimated_total_seconds,equals_hybrid")
     for row in rows:
         print(

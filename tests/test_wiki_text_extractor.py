@@ -1041,6 +1041,27 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_partial_benchmark_rewrites_malformed_csv_header(self):
+        # Verifies a broken/old benchmark CSV is replaced with a clean v2 header.
+        from benchmark_partial_methods import CSV_FIELDS, append_benchmark_rows
+
+        path = Path("test_partial_benchmark_malformed.csv")
+        try:
+            path.write_text(",".join(CSV_FIELDS) + "2,broken-first-row\n", encoding="utf-8")
+            row = {field: "" for field in CSV_FIELDS}
+            row.update({"schema_version": "2", "run_id": "clean", "method": "hybrid", "status": "ok"})
+
+            append_benchmark_rows(path, [row])
+
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["run_id"], "clean")
+            self.assertEqual(rows[0]["method"], "hybrid")
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_partial_benchmark_writes_error_text_on_method_failure(self):
         # Verifies failed benchmark methods still create a readable text file.
         from benchmark_partial_methods import CSV_FIELDS, run_method

@@ -243,10 +243,18 @@ def report_value(report: str, label: str) -> str:
 
 
 def append_benchmark_rows(path: Path, rows: list[dict[str, str]]) -> None:
-    # Appends rows and writes the v2 CSV header only when creating a fresh file.
+    # Appends rows only when the existing CSV already has the v2 header intact.
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not path.exists() or path.stat().st_size == 0
-    with path.open("a", newline="", encoding="utf-8") as handle:
+    write_header = True
+    mode = "w"
+    if path.exists() and path.stat().st_size > 0:
+        with path.open("r", newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            existing_header = next(reader, [])
+        if existing_header == CSV_FIELDS:
+            write_header = False
+            mode = "a"
+    with path.open(mode, newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, extrasaction="ignore")
         if write_header:
             writer.writeheader()

@@ -159,6 +159,29 @@ output\Large_language_model\English\partial_token_text.txt
 output\Large_language_model\English\partial_token_match_report.txt
 ```
 
+## Partial Text: Raw HTML Token Method (Experimental)
+
+This method token-matches the pasted text against a raw-visible HTML stream, then cleans only the matched raw HTML slice. It uses one start token anchor and one end token anchor, without the copied-token window slide/refinement used by the normal token method.
+
+Default raw-HTML token partial clean output:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_token_raw_html.py --url "https://en.wikipedia.org/wiki/Large_language_model"
+```
+
+Tune the raw-HTML token anchor size and minimum score:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_token_raw_html.py --url "https://en.wikipedia.org/wiki/Large_language_model" --window-tokens 60 --min-score 0.72
+```
+
+Raw-HTML token method outputs:
+
+```text
+output\Large_language_model\English\partial_token_raw_html_text.txt
+output\Large_language_model\English\partial_token_raw_html_match_report.txt
+```
+
 ## Partial Text: Diff Match Patch Method (Experimental)
 
 This method is only for timing comparison. It uses Google's `diff-match-patch` package with short start/end anchor chunks after the same caption/noise cleanup. It does not run a full article-wide DMP diff by default, because that is too slow for large pages.
@@ -301,6 +324,8 @@ partial_hybrid_text.txt
 partial_hybrid_match_report.txt
 partial_token_text.txt
 partial_token_match_report.txt
+partial_token_raw_html_text.txt
+partial_token_raw_html_match_report.txt
 partial_dmp_text.txt
 partial_dmp_match_report.txt
 partial_dmp_raw_html_text.txt
@@ -321,6 +346,10 @@ Use `--title` with `--lang` if you do not want to pass a URL.
 
 ```cmd
 .venv\Scripts\python.exe extract_partial_token.py --title "Large language model" --lang en
+```
+
+```cmd
+.venv\Scripts\python.exe extract_partial_token_raw_html.py --title "Large language model" --lang en
 ```
 
 ```cmd

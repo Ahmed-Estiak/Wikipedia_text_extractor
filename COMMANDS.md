@@ -184,7 +184,7 @@ output\Large_language_model\English\partial_token_raw_html_match_report.txt
 
 ## Partial Text: Diff Match Patch Method (Experimental)
 
-This method is only for timing comparison. It uses Google's `diff-match-patch` package with short start/end anchor chunks after the same caption/noise cleanup. It does not run a full article-wide DMP diff by default, because that is too slow for large pages.
+This method is only for timing comparison. It uses Google's `diff-match-patch` package with short start/end anchor chunks after the same caption/noise cleanup. It scans copied text in `300` character windows and refines boundaries with `100` character windows. It does not run a full article-wide DMP diff by default, because that is too slow for large pages.
 
 Install the optional package once if it is not already installed:
 
@@ -198,10 +198,10 @@ Default DMP partial clean output:
 .venv\Scripts\python.exe extract_partial_dmp.py --url "https://en.wikipedia.org/wiki/Large_language_model"
 ```
 
-Tune DMP coverage, anchor size, and timeout:
+Tune DMP coverage, anchor/refinement size, and timeout:
 
 ```cmd
-.venv\Scripts\python.exe extract_partial_dmp.py --url "https://en.wikipedia.org/wiki/Large_language_model" --min-coverage 0.72 --anchor-chars 600 --timeout 1.0
+.venv\Scripts\python.exe extract_partial_dmp.py --url "https://en.wikipedia.org/wiki/Large_language_model" --min-coverage 0.72 --anchor-chars 300 --refine-chars 100 --timeout 1.0
 ```
 
 DMP method outputs:
@@ -263,7 +263,7 @@ Run it again after changing `input_text\partial_input.txt`; the next benchmark r
 Tune benchmark settings:
 
 ```cmd
-.venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model" --token-window 60 --token-refine-tokens 20 --token-min-score 0.72 --dmp-min-coverage 0.72 --dmp-anchor-chars 600
+.venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model" --token-window 60 --token-refine-tokens 20 --token-min-score 0.72 --dmp-min-coverage 0.72 --dmp-anchor-chars 300 --dmp-refine-chars 100
 ```
 
 ## Debug Reports To Keep

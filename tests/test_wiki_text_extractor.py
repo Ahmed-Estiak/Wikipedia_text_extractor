@@ -740,6 +740,8 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(args.math, "latex")
         self.assertEqual(args.min_coverage, 0.72)
+        self.assertEqual(args.anchor_chars, 300)
+        self.assertEqual(args.refine_chars, 100)
         self.assertEqual(args.timeout, 1.0)
 
     def test_partial_benchmark_cli_defaults_to_latex_math(self):
@@ -754,6 +756,8 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(args.token_refine_tokens, 20)
         self.assertEqual(args.token_min_score, 0.72)
         self.assertEqual(args.dmp_min_coverage, 0.72)
+        self.assertEqual(args.dmp_anchor_chars, 300)
+        self.assertEqual(args.dmp_refine_chars, 100)
 
     def test_hybrid_index_extracts_headings_citations_and_references_boundary(self):
         # Verifies the hybrid index sees structural headings/citations but excludes final references.
@@ -962,6 +966,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             copied,
             min_coverage=0.70,
             anchor_chars=120,
+            refine_chars=60,
             chunk_size=24,
             timeout=0.5,
         )
@@ -971,6 +976,44 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertNotIn("Opening context", text)
         self.assertNotIn("Trailing context", text)
         self.assertIn("Start coverage:", report)
+        self.assertIn("Refine characters: 60", report)
+
+    def test_dmp_partial_extraction_skips_noisy_copied_tail(self):
+        # Verifies staged DMP can ignore copied tail text missing from the cleaned article.
+        if importlib.util.find_spec("diff_match_patch") is None:
+            self.skipTest("diff-match-patch package is not installed")
+        from extract_partial_dmp import dmp_partial_match
+
+        clean = (
+            "Opening context should stay outside.\n\n"
+            "Alpha attention weights open the selected prose. "
+            "Beta decoder alignment keeps the useful middle. "
+            "Gamma retrieval scoring closes the selected prose.\n\n"
+            "Trailing context should stay outside."
+        )
+        copied = (
+            "Alpha attention weights open the selected prose. "
+            "Beta decoder alignment keeps the useful middle. "
+            "Gamma retrieval scoring closes the selected prose. "
+            "2017 table timeline row should be absent from cleaned text. "
+            "2019 noisy survey row should also be absent."
+        )
+
+        text, report = dmp_partial_match(
+            clean,
+            copied,
+            min_coverage=0.68,
+            anchor_chars=80,
+            refine_chars=40,
+            chunk_size=20,
+            timeout=0.5,
+        )
+
+        self.assertIn("Alpha attention weights open", text)
+        self.assertIn("Gamma retrieval scoring closes", text)
+        self.assertNotIn("Opening context", text)
+        self.assertNotIn("Trailing context", text)
+        self.assertIn("End tail unmatched: yes", report)
 
     def test_partial_benchmark_appends_csv_rows(self):
         # Verifies benchmark results append rows without rewriting earlier measurements.

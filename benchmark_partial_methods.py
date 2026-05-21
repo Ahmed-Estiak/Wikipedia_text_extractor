@@ -120,8 +120,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dmp-anchor-chars",
         type=int,
-        default=600,
-        help="DMP matcher normalized copied characters used per boundary",
+        default=300,
+        help="DMP matcher normalized copied characters used per boundary window",
+    )
+    parser.add_argument(
+        "--dmp-refine-chars",
+        type=int,
+        default=100,
+        help="DMP matcher normalized copied characters used per refinement window",
     )
     parser.add_argument(
         "--dmp-timeout",
@@ -393,6 +399,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 pasted_text,
                 min_coverage=args.dmp_min_coverage,
                 anchor_chars=args.dmp_anchor_chars,
+                refine_chars=args.dmp_refine_chars,
                 timeout=args.dmp_timeout,
                 copied_image_captions=captions,
             )
@@ -413,7 +420,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             hybrid_text,
             (
                 f"min_coverage={args.dmp_min_coverage:.3f};"
-                f"anchor_chars={args.dmp_anchor_chars};timeout={args.dmp_timeout:.3f}"
+                f"anchor_chars={args.dmp_anchor_chars};refine_chars={args.dmp_refine_chars};"
+                f"timeout={args.dmp_timeout:.3f}"
             ),
             text_output_paths["dmp"],
         )

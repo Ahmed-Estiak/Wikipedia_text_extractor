@@ -50,6 +50,15 @@ class DmpBoundaryMatch:
     candidates_checked: int
 
 
+@dataclass(frozen=True)
+class DmpBoundarySearch:
+    # Records which copied character chunk produced the final DMP boundary.
+    match: DmpBoundaryMatch
+    copied_start: int
+    copied_end: int
+    chunks_checked: int
+
+
 def load_diff_match_patch():
     # Keeps the experimental dependency optional until this script is run.
     try:
@@ -97,8 +106,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--anchor-chars",
         type=int,
-        default=600,
-        help="Number of normalized copied characters used for start/end boundary scoring",
+        default=300,
+        help="Number of normalized copied characters used per start/end boundary window",
+    )
+    parser.add_argument(
+        "--refine-chars",
+        type=int,
+        default=100,
+        help="Number of normalized copied characters used per backward/forward refinement window",
+    )
+    parser.add_argument(
+        "--max-refine-failures",
+        type=int,
+        default=2,
+        help="Stop DMP boundary refinement after this many consecutive failed windows",
     )
     parser.add_argument(
         "--chunk-size",
@@ -247,6 +268,33 @@ def dmp_equal_coverage(diff_match_patch, left: str, right: str, timeout: float) 
     return equal_chars / len(right)
 
 
+def dmp_equal_coverage_and_span(
+    diff_match_patch, left: str, right: str, timeout: float
+) -> tuple[float, int, int]:
+    # Scores local windows and returns the meaningful equal span inside the clean window.
+    if not left or not right:
+        return 0.0, 0, 0
+    dmp = diff_match_patch()
+    dmp.Diff_Timeout = timeout
+    diffs = dmp.diff_main(left, right, checklines=False)
+    dmp.diff_cleanupEfficiency(diffs)
+    equal_chars = 0
+    left_index = 0
+    meaningful_spans: list[tuple[int, int]] = []
+    for operation, data in diffs:
+        if operation == 0:
+            equal_chars += len(data)
+            if chunk_is_meaningful(data):
+                meaningful_spans.append((left_index, left_index + len(data)))
+            left_index += len(data)
+        elif operation == -1:
+            left_index += len(data)
+    score = equal_chars / len(right)
+    if meaningful_spans:
+        return score, meaningful_spans[0][0], meaningful_spans[-1][1]
+    return score, 0, len(left)
+
+
 def find_dmp_boundary(
     diff_match_patch,
     clean_normalized: str,
@@ -322,20 +370,293 @@ def find_dmp_boundary(
     return best
 
 
+def dmp_char_chunks_in_range(
+    text_length: int,
+    start: int,
+    end: int,
+    chunk_chars: int,
+    chunk_size: int,
+    reverse: bool = False,
+) -> list[tuple[int, int]]:
+    # Builds non-overlapping copied-character windows for staged DMP matching.
+    start = max(0, min(start, text_length))
+    end = max(start, min(end, text_length))
+    min_chars = max(40, min(chunk_size, chunk_chars))
+    if end - start < min_chars:
+        return []
+    chunks: list[tuple[int, int]] = []
+    if reverse:
+        cursor = end
+        while cursor > start:
+            chunk_start = max(start, cursor - chunk_chars)
+            if cursor - chunk_start >= min_chars:
+                chunks.append((chunk_start, cursor))
+            cursor = chunk_start
+        return chunks
+
+    cursor = start
+    while cursor < end:
+        chunk_end = min(end, cursor + chunk_chars)
+        if chunk_end - cursor >= min_chars:
+            chunks.append((cursor, chunk_end))
+        cursor = chunk_end
+    return chunks
+
+
+def find_dmp_anchor_match(
+    diff_match_patch,
+    clean_normalized: str,
+    copied_window: str,
+    min_score: float,
+    chunk_size: int,
+    max_chunks: int,
+    match_threshold: float,
+    timeout: float,
+    min_start: int = 0,
+    max_end: int | None = None,
+    tie_preference: str = "first",
+) -> DmpBoundaryMatch | None:
+    # Finds one copied character window in clean text using short DMP-safe chunks.
+    if not clean_normalized or not copied_window:
+        return None
+    dmp = diff_match_patch()
+    dmp.Match_Distance = max(len(clean_normalized), 1000)
+    dmp.Match_Threshold = match_threshold
+    if tie_preference == "last":
+        preferred_loc = max_end if max_end is not None else len(clean_normalized)
+    else:
+        preferred_loc = min_start
+    preferred_loc = max(0, min(preferred_loc, len(clean_normalized)))
+    offsets = dmp_chunk_offsets(
+        len(copied_window),
+        "start",
+        len(copied_window),
+        chunk_size,
+        max_chunks,
+    )
+    candidates_checked = 0
+    best: DmpBoundaryMatch | None = None
+    for offset in offsets:
+        chunk = copied_window[offset : offset + min(chunk_size, len(copied_window) - offset)]
+        if not chunk_is_meaningful(chunk):
+            continue
+        matched_at = dmp.match_main(clean_normalized, chunk, preferred_loc)
+        candidates_checked += 1
+        if matched_at < 0:
+            continue
+        candidate_start = matched_at - offset
+        candidate_end = candidate_start + len(copied_window)
+        if candidate_start < min_start:
+            continue
+        if max_end is not None and candidate_end > max_end:
+            continue
+        if candidate_start < 0 or candidate_end > len(clean_normalized):
+            continue
+        clean_window = clean_normalized[candidate_start:candidate_end]
+        score, span_start, span_end = dmp_equal_coverage_and_span(
+            diff_match_patch,
+            clean_window,
+            copied_window,
+            timeout,
+        )
+        if score < min_score:
+            continue
+        match = DmpBoundaryMatch(
+            score=score,
+            normalized_start=candidate_start + span_start,
+            normalized_end=candidate_start + span_end,
+            chunk_offset=offset,
+            matched_at=matched_at,
+            candidates_checked=candidates_checked,
+        )
+        if best is None or score > best.score:
+            best = match
+            continue
+        if abs(score - best.score) <= 1e-9:
+            if tie_preference == "last" and candidate_end > best.normalized_end:
+                best = match
+            elif tie_preference != "last" and candidate_start < best.normalized_start:
+                best = match
+    return best
+
+
+def find_dmp_boundary_search(
+    diff_match_patch,
+    clean_normalized: str,
+    copied_normalized: str,
+    side: str,
+    window_chars: int,
+    min_score: float,
+    chunk_size: int,
+    max_chunks: int,
+    match_threshold: float,
+    timeout: float,
+    min_start: int = 0,
+) -> DmpBoundarySearch | None:
+    # Scans copied start/end in non-overlapping windows until one window matches clean text.
+    copied_chunks = dmp_char_chunks_in_range(
+        len(copied_normalized),
+        0,
+        len(copied_normalized),
+        window_chars,
+        chunk_size,
+        reverse=(side == "end"),
+    )
+    tie_preference = "last" if side == "end" else "first"
+    for index, (copied_start, copied_end) in enumerate(copied_chunks):
+        copied_window = copied_normalized[copied_start:copied_end]
+        match = find_dmp_anchor_match(
+            diff_match_patch,
+            clean_normalized,
+            copied_window,
+            min_score,
+            chunk_size,
+            max_chunks,
+            match_threshold,
+            timeout,
+            min_start=min_start,
+            tie_preference=tie_preference,
+        )
+        if match is None:
+            continue
+        return DmpBoundarySearch(
+            match=match,
+            copied_start=copied_start,
+            copied_end=copied_end,
+            chunks_checked=index + 1,
+        )
+    return None
+
+
+def dmp_boundary_with_chunks(
+    boundary: DmpBoundarySearch, chunks_checked: int
+) -> DmpBoundarySearch:
+    # Preserves the final match while recording failed refinement attempts.
+    return DmpBoundarySearch(
+        match=boundary.match,
+        copied_start=boundary.copied_start,
+        copied_end=boundary.copied_end,
+        chunks_checked=chunks_checked,
+    )
+
+
+def refine_dmp_start_boundary(
+    boundary: DmpBoundarySearch,
+    diff_match_patch,
+    clean_normalized: str,
+    copied_normalized: str,
+    refine_chars: int,
+    min_score: float,
+    chunk_size: int,
+    max_chunks: int,
+    match_threshold: float,
+    timeout: float,
+    max_failures: int,
+) -> DmpBoundarySearch:
+    # Walks backward over earlier copied character windows to recover skipped start text.
+    current = boundary
+    chunks_checked = boundary.chunks_checked
+    failures = 0
+    refine_chunks = dmp_char_chunks_in_range(
+        len(copied_normalized),
+        0,
+        current.copied_start,
+        refine_chars,
+        chunk_size,
+        reverse=True,
+    )
+    for copied_start, copied_end in refine_chunks:
+        if failures >= max_failures:
+            break
+        chunks_checked += 1
+        copied_window = copied_normalized[copied_start:copied_end]
+        match = find_dmp_anchor_match(
+            diff_match_patch,
+            clean_normalized,
+            copied_window,
+            min_score,
+            chunk_size,
+            max_chunks,
+            match_threshold,
+            timeout,
+            max_end=current.match.normalized_start,
+            tie_preference="last",
+        )
+        if match is None:
+            failures += 1
+            continue
+        current = DmpBoundarySearch(match, copied_start, copied_end, chunks_checked)
+        failures = 0
+    return dmp_boundary_with_chunks(current, chunks_checked)
+
+
+def refine_dmp_end_boundary(
+    boundary: DmpBoundarySearch,
+    diff_match_patch,
+    clean_normalized: str,
+    copied_normalized: str,
+    refine_chars: int,
+    min_score: float,
+    chunk_size: int,
+    max_chunks: int,
+    match_threshold: float,
+    timeout: float,
+    max_failures: int,
+) -> DmpBoundarySearch:
+    # Walks forward over later copied character windows to recover matched tail text.
+    current = boundary
+    chunks_checked = boundary.chunks_checked
+    failures = 0
+    refine_chunks = dmp_char_chunks_in_range(
+        len(copied_normalized),
+        current.copied_end,
+        len(copied_normalized),
+        refine_chars,
+        chunk_size,
+    )
+    for copied_start, copied_end in refine_chunks:
+        if failures >= max_failures:
+            break
+        chunks_checked += 1
+        copied_window = copied_normalized[copied_start:copied_end]
+        match = find_dmp_anchor_match(
+            diff_match_patch,
+            clean_normalized,
+            copied_window,
+            min_score,
+            chunk_size,
+            max_chunks,
+            match_threshold,
+            timeout,
+            min_start=current.match.normalized_end,
+            tie_preference="first",
+        )
+        if match is None:
+            failures += 1
+            continue
+        current = DmpBoundarySearch(match, copied_start, copied_end, chunks_checked)
+        failures = 0
+    return dmp_boundary_with_chunks(current, chunks_checked)
+
+
 def dmp_partial_match(
     clean_text: str,
     copied_text: str,
     min_coverage: float = 0.72,
-    anchor_chars: int = 600,
+    anchor_chars: int = 300,
+    refine_chars: int = 100,
     chunk_size: int = 32,
     max_chunks: int = 16,
     match_threshold: float = 0.35,
     timeout: float = 1.0,
+    max_refine_failures: int = 2,
     copied_image_captions: list[str] | None = None,
 ) -> tuple[str, str]:
     # Uses DMP anchor chunks to infer the clean span corresponding to pasted text.
     if chunk_size > 32:
         raise ValueError("chunk_size must be 32 or less for diff-match-patch match_main")
+    if refine_chars < max(40, chunk_size):
+        raise ValueError("refine_chars must be at least 40 and no smaller than chunk_size")
     diff_match_patch = load_diff_match_patch()
     clean_index = build_hybrid_text_index(clean_text)
     copied_text, stripped_caption_count = strip_copied_caption_phrases(
@@ -370,19 +691,19 @@ def dmp_partial_match(
         raise PartialExtractionError(message, report)
 
     match_started_at = time.perf_counter()
-    start_match = find_dmp_boundary(
+    start_boundary = find_dmp_boundary_search(
         diff_match_patch,
         clean_normalized,
         copied_normalized,
         "start",
-        min_coverage,
         anchor_chars,
+        min_coverage,
         chunk_size,
         max_chunks,
         match_threshold,
         timeout,
     )
-    if start_match is None:
+    if start_boundary is None:
         message = "failed: DMP start boundary did not meet the minimum coverage"
         report = "\n".join(
             [
@@ -390,25 +711,38 @@ def dmp_partial_match(
                 "",
                 message,
                 f"Minimum coverage: {min_coverage:.3f}",
+                f"Anchor characters: {min(anchor_chars, len(copied_normalized))}",
             ]
         )
         raise PartialExtractionError(message, report)
-
-    end_match = find_dmp_boundary(
+    start_boundary = refine_dmp_start_boundary(
+        start_boundary,
         diff_match_patch,
         clean_normalized,
         copied_normalized,
-        "end",
+        refine_chars,
         min_coverage,
-        anchor_chars,
         chunk_size,
         max_chunks,
         match_threshold,
         timeout,
-        min_start=start_match.normalized_start,
+        max_refine_failures,
     )
-    match_seconds = time.perf_counter() - match_started_at
-    if end_match is None:
+
+    end_boundary = find_dmp_boundary_search(
+        diff_match_patch,
+        clean_normalized,
+        copied_normalized,
+        "end",
+        anchor_chars,
+        min_coverage,
+        chunk_size,
+        max_chunks,
+        match_threshold,
+        timeout,
+        min_start=start_boundary.match.normalized_start,
+    )
+    if end_boundary is None:
         message = "failed: DMP end boundary did not meet the minimum coverage"
         report = "\n".join(
             [
@@ -416,10 +750,28 @@ def dmp_partial_match(
                 "",
                 message,
                 f"Minimum coverage: {min_coverage:.3f}",
-                f"Start score: {start_match.score:.3f}",
+                f"Start score: {start_boundary.match.score:.3f}",
+                f"Anchor characters: {min(anchor_chars, len(copied_normalized))}",
+                f"Start copied char chunk: {start_boundary.copied_start}-{start_boundary.copied_end}",
             ]
         )
         raise PartialExtractionError(message, report)
+    end_boundary = refine_dmp_end_boundary(
+        end_boundary,
+        diff_match_patch,
+        clean_normalized,
+        copied_normalized,
+        refine_chars,
+        min_coverage,
+        chunk_size,
+        max_chunks,
+        match_threshold,
+        timeout,
+        max_refine_failures,
+    )
+    match_seconds = time.perf_counter() - match_started_at
+    start_match = start_boundary.match
+    end_match = end_boundary.match
 
     start, _start_end = original_span_from_dmp_map(
         clean_map,
@@ -461,14 +813,22 @@ def dmp_partial_match(
         f"End coverage: {end_match.score:.3f}",
         f"Minimum coverage: {min_coverage:.3f}",
         f"Anchor characters: {min(anchor_chars, len(copied_normalized))}",
+        f"Refine characters: {min(refine_chars, len(copied_normalized))}",
         f"Chunk size: {min(chunk_size, 32)}",
         f"Max chunks: {max_chunks}",
+        f"Max refine failures: {max_refine_failures}",
         f"Match threshold: {match_threshold:.3f}",
         f"Local DMP timeout: {timeout:.3f} seconds",
         f"DMP match runtime: {match_seconds:.3f} seconds",
+        f"Start copied char chunk: {start_boundary.copied_start}-{start_boundary.copied_end}",
+        f"Start chunks checked/refined: {start_boundary.chunks_checked}",
+        f"Start head unmatched: {'yes' if start_boundary.copied_start > 0 else 'no'}",
         f"Start candidates checked: {start_match.candidates_checked}",
         f"Start chunk offset: {start_match.chunk_offset}",
         f"Start matched at: {start_match.matched_at}",
+        f"End copied char chunk: {end_boundary.copied_start}-{end_boundary.copied_end}",
+        f"End chunks checked/refined: {end_boundary.chunks_checked}",
+        f"End tail unmatched: {'yes' if end_boundary.copied_end < len(copied_normalized) else 'no'}",
         f"End candidates checked: {end_match.candidates_checked}",
         f"End chunk offset: {end_match.chunk_offset}",
         f"End matched at: {end_match.matched_at}",
@@ -509,10 +869,12 @@ def main(argv: Iterable[str] | None = None) -> int:
             pasted_text,
             min_coverage=args.min_coverage,
             anchor_chars=args.anchor_chars,
+            refine_chars=args.refine_chars,
             chunk_size=args.chunk_size,
             max_chunks=args.max_chunks,
             match_threshold=args.match_threshold,
             timeout=args.timeout,
+            max_refine_failures=args.max_refine_failures,
             copied_image_captions=captions,
         )
         match_seconds = time.perf_counter() - match_started_at

@@ -188,6 +188,29 @@ output\Large_language_model\English\partial_dmp_text.txt
 output\Large_language_model\English\partial_dmp_match_report.txt
 ```
 
+## Partial Text: Raw HTML DMP Method (Experimental)
+
+This method matches the pasted text against a raw-visible HTML stream before cleaning the matched HTML slice. It is useful when copied table/timeline/caption text prevents clean-output DMP from finding the end boundary.
+
+Default raw-HTML DMP partial clean output:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_dmp_raw_html.py --url "https://en.wikipedia.org/wiki/Large_language_model"
+```
+
+Tune raw-HTML DMP coverage, anchor size, and timeout:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_dmp_raw_html.py --url "https://en.wikipedia.org/wiki/Large_language_model" --min-coverage 0.50 --anchor-chars 600 --timeout 1.0
+```
+
+Raw-HTML DMP method outputs:
+
+```text
+output\Large_language_model\English\partial_dmp_raw_html_text.txt
+output\Large_language_model\English\partial_dmp_raw_html_match_report.txt
+```
+
 ## Partial Method Runtime Benchmark CSV
 
 Run hybrid, token, and DMP consecutively against the same pasted input. The three clean text files are overwritten fresh on each run, while three timing rows are appended to the CSV file. Fetch and clean are shared once; each CSV row records the method-specific match runtime and estimated full runtime.
@@ -280,6 +303,8 @@ partial_token_text.txt
 partial_token_match_report.txt
 partial_dmp_text.txt
 partial_dmp_match_report.txt
+partial_dmp_raw_html_text.txt
+partial_dmp_raw_html_match_report.txt
 ```
 
 ## Title Instead of URL
@@ -300,6 +325,10 @@ Use `--title` with `--lang` if you do not want to pass a URL.
 
 ```cmd
 .venv\Scripts\python.exe extract_partial_dmp.py --title "Large language model" --lang en
+```
+
+```cmd
+.venv\Scripts\python.exe extract_partial_dmp_raw_html.py --title "Large language model" --lang en
 ```
 
 ## Run Tests

@@ -1062,6 +1062,26 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_partial_benchmark_records_output_boundary_words(self):
+        # Verifies benchmark CSV rows store first/last visible words from the final output.
+        from benchmark_partial_methods import CSV_FIELDS, method_row
+
+        path = Path("benchmark_output.txt")
+        row = method_row(
+            {field: "" for field in CSV_FIELDS},
+            "hybrid",
+            "ok",
+            0.1,
+            0.2,
+            0.3,
+            True,
+            path,
+            text='== History ==\n\nUnlike "hard" weights finish here.',
+        )
+
+        self.assertEqual(row["output_first_word"], "History")
+        self.assertEqual(row["output_last_word"], "here")
+
     def test_partial_benchmark_writes_error_text_on_method_failure(self):
         # Verifies failed benchmark methods still create a readable text file.
         from benchmark_partial_methods import CSV_FIELDS, run_method

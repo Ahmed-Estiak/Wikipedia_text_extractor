@@ -244,7 +244,7 @@ Run all five partial methods consecutively against the same pasted input:
 - `token_raw_html`
 - `dmp_raw_html`
 
-The five clean text files are overwritten fresh on each run, while five timing rows are appended to the new 5-way CSV file. The CSV uses the v2 schema with method family, match surface, offset basis, output file path, scores, and baseline equality columns.
+The five clean text files are overwritten fresh on each run, while five timing rows are appended to the new 5-way CSV file. The CSV uses the v2 schema with method family, match surface, offset basis, output file path, output first/last word, scores, and baseline equality columns.
 
 ```cmd
 .venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model"

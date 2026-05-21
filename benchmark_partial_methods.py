@@ -64,6 +64,8 @@ CSV_FIELDS = [
     "output_file",
     "output_chars",
     "output_sha256",
+    "output_first_word",
+    "output_last_word",
     "equals_hybrid",
     "equals_token",
     "start_offset",
@@ -236,6 +238,14 @@ def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def output_boundary_words(text: str) -> tuple[str, str]:
+    # Captures the first and last visible words so outputs can be compared at a glance.
+    words = re.findall(r"[^\W_]+(?:[-'][^\W_]+)*", text, flags=re.UNICODE)
+    if not words:
+        return "", ""
+    return words[0], words[-1]
+
+
 def report_value(report: str, label: str) -> str:
     # Pulls numeric diagnostics out of human-readable method reports.
     match = re.search(rf"^{re.escape(label)}:\s*(.+)$", report, flags=re.MULTILINE)
@@ -297,6 +307,7 @@ def method_row(
     estimated_total = fetch_seconds + match_seconds
     if uses_full_clean:
         estimated_total += full_clean_seconds
+    first_word, last_word = output_boundary_words(text) if text else ("", "")
     row = dict(base)
     row.update(
         {
@@ -313,6 +324,8 @@ def method_row(
             "output_file": str(output_path),
             "output_chars": str(len(text)) if text else "0",
             "output_sha256": text_hash(text) if text else "",
+            "output_first_word": first_word,
+            "output_last_word": last_word,
             "equals_hybrid": "",
             "equals_token": "",
             "start_offset": start_offset,

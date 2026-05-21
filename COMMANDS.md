@@ -236,7 +236,15 @@ output\Large_language_model\English\partial_dmp_raw_html_match_report.txt
 
 ## Partial Method Runtime Benchmark CSV
 
-Run hybrid, token, and DMP consecutively against the same pasted input. The three clean text files are overwritten fresh on each run, while three timing rows are appended to the CSV file. Fetch and clean are shared once; each CSV row records the method-specific match runtime and estimated full runtime.
+Run all five partial methods consecutively against the same pasted input:
+
+- `hybrid`
+- `token`
+- `dmp`
+- `token_raw_html`
+- `dmp_raw_html`
+
+The five clean text files are overwritten fresh on each run, while five timing rows are appended to the new 5-way CSV file. The CSV uses the v2 schema with method family, match surface, offset basis, output file path, scores, and baseline equality columns.
 
 ```cmd
 .venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model"
@@ -245,7 +253,7 @@ Run hybrid, token, and DMP consecutively against the same pasted input. The thre
 CSV output:
 
 ```text
-output\Large_language_model\English\large_language_model_partial_benchmark.csv
+output\Large_language_model\English\large_language_model_partial_benchmark_5way.csv
 ```
 
 Clean text outputs overwritten on every run:
@@ -254,6 +262,8 @@ Clean text outputs overwritten on every run:
 output\Large_language_model\English\partial_benchmark_hybrid_text.txt
 output\Large_language_model\English\partial_benchmark_token_text.txt
 output\Large_language_model\English\partial_benchmark_dmp_text.txt
+output\Large_language_model\English\partial_benchmark_token_raw_html_text.txt
+output\Large_language_model\English\partial_benchmark_dmp_raw_html_text.txt
 ```
 
 If one method fails, its text file is still overwritten with a readable error report instead of being left missing.
@@ -263,7 +273,7 @@ Run it again after changing `input_text\partial_input.txt`; the next benchmark r
 Tune benchmark settings:
 
 ```cmd
-.venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model" --token-window 60 --token-refine-tokens 20 --token-min-score 0.72 --dmp-min-coverage 0.72 --dmp-anchor-chars 300 --dmp-refine-chars 100
+.venv\Scripts\python.exe benchmark_partial_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model" --token-window 60 --token-refine-tokens 20 --token-min-score 0.72 --dmp-min-coverage 0.72 --dmp-anchor-chars 300 --dmp-refine-chars 100 --raw-token-window 60 --raw-token-min-score 0.72 --raw-dmp-min-coverage 0.50 --raw-dmp-anchor-chars 600
 ```
 
 ## Debug Reports To Keep

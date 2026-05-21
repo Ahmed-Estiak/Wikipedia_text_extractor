@@ -751,13 +751,17 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         args = build_parser().parse_args(["--url", "https://en.wikipedia.org/wiki/Kuiper_belt"])
 
         self.assertEqual(args.math, "latex")
-        self.assertEqual(args.csv, "output/partial_method_benchmark.csv")
+        self.assertEqual(args.csv, "output/partial_method_benchmark_5way.csv")
         self.assertEqual(args.token_window, 60)
         self.assertEqual(args.token_refine_tokens, 20)
         self.assertEqual(args.token_min_score, 0.72)
         self.assertEqual(args.dmp_min_coverage, 0.72)
         self.assertEqual(args.dmp_anchor_chars, 300)
         self.assertEqual(args.dmp_refine_chars, 100)
+        self.assertEqual(args.raw_token_window, 60)
+        self.assertEqual(args.raw_token_min_score, 0.72)
+        self.assertEqual(args.raw_dmp_min_coverage, 0.50)
+        self.assertEqual(args.raw_dmp_anchor_chars, 600)
 
     def test_hybrid_index_extracts_headings_citations_and_references_boundary(self):
         # Verifies the hybrid index sees structural headings/citations but excludes final references.
@@ -1053,7 +1057,6 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
                 {field: "" for field in CSV_FIELDS},
                 0.1,
                 0.2,
-                "hybrid text",
                 "settings",
                 path,
             )
@@ -1079,7 +1082,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         page = PageRequest("Benchmark topic", "en")
         paths = [
             benchmark_text_output_path("test_benchmark_outputs/result.txt", page, method)
-            for method in ("hybrid", "token", "dmp")
+            for method in ("hybrid", "token", "dmp", "token_raw_html", "dmp_raw_html")
         ]
         try:
             for path in paths:
@@ -1088,7 +1091,7 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
             returned = clear_benchmark_text_outputs("test_benchmark_outputs/result.txt", page)
 
-            self.assertEqual(set(returned), {"hybrid", "token", "dmp"})
+            self.assertEqual(set(returned), {"hybrid", "token", "dmp", "token_raw_html", "dmp_raw_html"})
             self.assertTrue(all(not path.exists() for path in paths))
         finally:
             for path in paths:
@@ -1983,8 +1986,8 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         from benchmark_partial_methods import benchmark_csv_path, benchmark_text_output_path
 
         self.assertEqual(
-            benchmark_csv_path("output/partial_method_benchmark.csv", page),
-            Path("output/Kuiper_belt/English/kuiper_belt_partial_benchmark.csv"),
+            benchmark_csv_path("output/partial_method_benchmark_5way.csv", page),
+            Path("output/Kuiper_belt/English/kuiper_belt_partial_benchmark_5way.csv"),
         )
         self.assertEqual(
             benchmark_text_output_path("output/partial_method_benchmark.csv", page, "hybrid"),

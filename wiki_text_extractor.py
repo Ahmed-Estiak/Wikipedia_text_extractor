@@ -3725,11 +3725,16 @@ def extract_partial_hybrid_text(
         report_lines.append(f"Start sentence-window score: {start_match[4]:.3f}")
         report_lines.append(f"Start search range: {start_range_label}")
     else:
+        start_has_structural_anchor = first_heading is not None or start_citation_clean_start is not None
+        if not start_has_structural_anchor:
+            message = "failed: hybrid start sentence-window match was not reliable"
+            report_lines.append("Start sentence-window match failed; no reliable heading/citation anchor.")
+            raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
         start = coarse_start
         start_search_begin = start_ranges[0][0] if start_ranges else 0
         start_search_end = start_ranges[0][1] if start_ranges else coarse_end
-        confidence = "low"
-        report_lines.append("Start sentence-window match failed; used structural fallback.")
+        confidence = "medium"
+        report_lines.append("Start sentence-window match failed; used matched heading/citation anchor.")
 
     partial_start = resolve_partial_start_boundary(
         start_copied_sentences,
@@ -3805,11 +3810,16 @@ def extract_partial_hybrid_text(
         report_lines.append(f"End sentence-window score: {end_match[4]:.3f}")
         report_lines.append(f"End search range: {end_range_label}")
     else:
+        end_has_structural_anchor = last_heading is not None or end_citation_clean_end is not None
+        if not end_has_structural_anchor:
+            message = "failed: hybrid end sentence-window match was not reliable"
+            report_lines.append("End sentence-window match failed; no reliable heading/citation anchor.")
+            raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))
         end = coarse_end
         end_search_start = end_ranges[0][0] if end_ranges else start
         end_search_limit = end_ranges[0][1] if end_ranges else coarse_end
-        confidence = "low"
-        report_lines.append("End sentence-window match failed; used structural fallback.")
+        confidence = "medium"
+        report_lines.append("End sentence-window match failed; used matched heading/citation anchor.")
 
     partial_end = resolve_partial_end_boundary(
         end_copied_sentences,

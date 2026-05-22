@@ -1474,7 +1474,28 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertTrue(result.text.startswith("== Evaluation =="))
         self.assertNotIn("Earlier unrelated article text", result.text)
-        self.assertIn("Start sentence-window match failed; used structural fallback.", result.report)
+        self.assertIn("Start sentence-window match failed; used matched heading/citation anchor.", result.report)
+
+    def test_hybrid_without_reliable_anchor_fails_instead_of_body_fallback(self):
+        # Verifies unrelated copied text cannot fall back to the whole clean article body.
+        clean = (
+            "Article opening should not be returned.\n\n"
+            "== History ==\n\n"
+            "A short historical note.\n\n"
+            "== References ==\n\n"
+            "1. Source."
+        )
+        copied = (
+            "FlashAttention is an implementation that reduces memory needs.[48]\n\n"
+            "Applications\n"
+            "Attention is widely used in computer vision.[50]"
+        )
+
+        with self.assertRaises(PartialExtractionError) as context:
+            extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("failed: hybrid start sentence-window match was not reliable", str(context.exception))
+        self.assertIn("no reliable heading/citation anchor", context.exception.report_text)
 
     def test_hybrid_start_keeps_author_abbreviation_before_citation(self):
         # Verifies start citation boundaries include author text before an et al. abbreviation.

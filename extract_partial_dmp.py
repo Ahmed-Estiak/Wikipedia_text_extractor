@@ -6,6 +6,7 @@ import argparse
 import re
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -16,10 +17,12 @@ from wiki_text_extractor import (
     PageRequest,
     PartialExtractionError,
     build_hybrid_text_index,
+    build_token_inverted_index,
     clean_wikipedia_html_with_references,
     extract_image_captions_from_html,
     fetch_page_html,
     finalize_partial_hybrid_output,
+    find_token_anchor_match,
     heading_section_spans,
     page_request_from_url,
     partial_dmp_output_path,
@@ -31,6 +34,9 @@ from wiki_text_extractor import (
     strip_copied_caption_phrases,
     strip_copied_ignored_sections,
     normalize_copied_text_for_hybrid_sentences,
+    token_anchor_chunks,
+    token_chunks_in_range,
+    tokenize_with_offsets,
     update_runtime_report,
     write_text_file,
 )
@@ -57,6 +63,9 @@ class DmpBoundarySearch:
     copied_start: int
     copied_end: int
     chunks_checked: int
+    copied_start_token: int = 0
+    copied_end_token: int = 0
+    locator: str = "dmp"
 
 
 def load_diff_match_patch():
@@ -144,6 +153,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Local Diff Match Patch diff timeout in seconds",
+    )
+    parser.add_argument(
+        "--locator-window-tokens",
+        type=int,
+        default=60,
+        help="Token chunk size used to locate DMP start/end before local verification",
+    )
+    parser.add_argument(
+        "--locator-refine-tokens",
+        type=int,
+        default=20,
+        help="Token chunk size used to refine DMP boundaries after an anchor is found",
+    )
+    parser.add_argument(
+        "--locator-min-score",
+        type=float,
+        default=0.72,
+        help="Minimum token score required before DMP local verification",
+    )
+    parser.add_argument(
+        "--locator-max-candidates",
+        type=int,
+        default=240,
+        help="Maximum token candidate windows checked for each DMP locator chunk",
     )
     return parser
 
@@ -528,6 +561,196 @@ def find_dmp_boundary_search(
     return None
 
 
+def token_index_at_or_after(tokens, char_offset: int) -> int:
+    # Converts a normalized character offset into the first token index at/after it.
+    for index, token in enumerate(tokens):
+        if token.end > char_offset:
+            return index
+    return len(tokens)
+
+
+def token_index_ending_at_or_before(tokens, char_offset: int) -> int:
+    # Converts a normalized character offset into an exclusive token limit.
+    for index, token in enumerate(tokens):
+        if token.end > char_offset:
+            return index
+    return len(tokens)
+
+
+def token_chunk_char_span(tokens, start_token: int, end_token: int) -> tuple[int, int]:
+    # Maps copied token chunk indexes back to normalized character offsets.
+    if not tokens or start_token >= end_token:
+        return 0, 0
+    return tokens[start_token].start, tokens[end_token - 1].end
+
+
+def exact_dmp_window_match(
+    clean_normalized: str,
+    copied_window: str,
+    copied_start: int,
+    min_start: int = 0,
+    max_end: int | None = None,
+    tie_preference: str = "first",
+) -> DmpBoundaryMatch | None:
+    # Fast path: exact normalized substring matches are better than approximate DMP search.
+    if not copied_window:
+        return None
+    search_end = len(clean_normalized) if max_end is None else max_end
+    search_start = max(0, min_start)
+    if search_end <= search_start:
+        return None
+    if tie_preference == "last":
+        matched_at = clean_normalized.rfind(copied_window, search_start, search_end)
+    else:
+        matched_at = clean_normalized.find(copied_window, search_start, search_end)
+    if matched_at < 0:
+        return None
+    return DmpBoundaryMatch(
+        score=1.0,
+        normalized_start=matched_at,
+        normalized_end=matched_at + len(copied_window),
+        chunk_offset=copied_start,
+        matched_at=matched_at,
+        candidates_checked=0,
+    )
+
+
+def token_dmp_window_match(
+    diff_match_patch,
+    clean_normalized: str,
+    copied_normalized: str,
+    clean_tokens,
+    copied_tokens,
+    inverted_index: dict[str, list[int]],
+    frequencies: Counter[str],
+    copied_start_token: int,
+    copied_end_token: int,
+    anchor_tokens: list[str],
+    min_coverage: float,
+    locator_min_score: float,
+    locator_max_candidates: int,
+    timeout: float,
+    min_start: int = 0,
+    max_end: int | None = None,
+    tie_preference: str = "first",
+) -> DmpBoundaryMatch | None:
+    # Uses token overlap to find a local candidate, then verifies it with DMP coverage.
+    copied_start, copied_end = token_chunk_char_span(
+        copied_tokens,
+        copied_start_token,
+        copied_end_token,
+    )
+    copied_window = copied_normalized[copied_start:copied_end]
+    exact_match = exact_dmp_window_match(
+        clean_normalized,
+        copied_window,
+        copied_start,
+        min_start=min_start,
+        max_end=max_end,
+        tie_preference=tie_preference,
+    )
+    if exact_match is not None:
+        return exact_match
+
+    min_start_token = token_index_at_or_after(clean_tokens, min_start)
+    max_end_token = (
+        token_index_ending_at_or_before(clean_tokens, max_end)
+        if max_end is not None
+        else None
+    )
+    token_match = find_token_anchor_match(
+        clean_tokens,
+        anchor_tokens,
+        inverted_index,
+        frequencies,
+        locator_min_score,
+        max_candidates=locator_max_candidates,
+        confirm_mode="none",
+        min_start_token=min_start_token,
+        max_end_token=max_end_token,
+        tie_preference=tie_preference,
+    )
+    if token_match is None:
+        return None
+    clean_window = clean_normalized[token_match.start:token_match.end]
+    score, span_start, span_end = dmp_equal_coverage_and_span(
+        diff_match_patch,
+        clean_window,
+        copied_window,
+        timeout,
+    )
+    if score < min_coverage:
+        return None
+    return DmpBoundaryMatch(
+        score=score,
+        normalized_start=token_match.start + span_start,
+        normalized_end=token_match.start + span_end,
+        chunk_offset=copied_start,
+        matched_at=token_match.start,
+        candidates_checked=token_match.candidates_checked,
+    )
+
+
+def find_token_dmp_boundary_search(
+    diff_match_patch,
+    clean_normalized: str,
+    copied_normalized: str,
+    clean_tokens,
+    copied_tokens,
+    inverted_index: dict[str, list[int]],
+    frequencies: Counter[str],
+    side: str,
+    window_tokens: int,
+    min_coverage: float,
+    locator_min_score: float,
+    locator_max_candidates: int,
+    timeout: float,
+    min_start: int = 0,
+) -> DmpBoundarySearch | None:
+    # Progressively checks copied 60-token chunks until token+DMP finds a boundary.
+    effective_window_tokens = window_tokens
+    if len(copied_tokens) <= window_tokens and len(copied_tokens) >= 16:
+        effective_window_tokens = max(8, len(copied_tokens) // 2)
+    chunks = token_anchor_chunks(copied_tokens, side, effective_window_tokens)
+    tie_preference = "last" if side == "end" else "first"
+    for index, (copied_start_token, copied_end_token, anchor_tokens) in enumerate(chunks):
+        match = token_dmp_window_match(
+            diff_match_patch,
+            clean_normalized,
+            copied_normalized,
+            clean_tokens,
+            copied_tokens,
+            inverted_index,
+            frequencies,
+            copied_start_token,
+            copied_end_token,
+            anchor_tokens,
+            min_coverage,
+            locator_min_score,
+            locator_max_candidates,
+            timeout,
+            min_start=min_start,
+            tie_preference=tie_preference,
+        )
+        if match is None:
+            continue
+        copied_start, copied_end = token_chunk_char_span(
+            copied_tokens,
+            copied_start_token,
+            copied_end_token,
+        )
+        return DmpBoundarySearch(
+            match=match,
+            copied_start=copied_start,
+            copied_end=copied_end,
+            chunks_checked=index + 1,
+            copied_start_token=copied_start_token,
+            copied_end_token=copied_end_token,
+            locator="token+dmp",
+        )
+    return None
+
+
 def dmp_boundary_with_chunks(
     boundary: DmpBoundarySearch, chunks_checked: int
 ) -> DmpBoundarySearch:
@@ -537,6 +760,9 @@ def dmp_boundary_with_chunks(
         copied_start=boundary.copied_start,
         copied_end=boundary.copied_end,
         chunks_checked=chunks_checked,
+        copied_start_token=boundary.copied_start_token,
+        copied_end_token=boundary.copied_end_token,
+        locator=boundary.locator,
     )
 
 
@@ -639,6 +865,144 @@ def refine_dmp_end_boundary(
     return dmp_boundary_with_chunks(current, chunks_checked)
 
 
+def refine_token_dmp_start_boundary(
+    boundary: DmpBoundarySearch,
+    diff_match_patch,
+    clean_normalized: str,
+    copied_normalized: str,
+    clean_tokens,
+    copied_tokens,
+    inverted_index: dict[str, list[int]],
+    frequencies: Counter[str],
+    refine_tokens: int,
+    min_coverage: float,
+    locator_min_score: float,
+    locator_max_candidates: int,
+    timeout: float,
+    max_failures: int,
+) -> DmpBoundarySearch:
+    # Walks backward over earlier copied token chunks and verifies each with DMP.
+    current = boundary
+    chunks_checked = boundary.chunks_checked
+    failures = 0
+    previous_chunks = token_chunks_in_range(
+        copied_tokens,
+        0,
+        current.copied_start_token,
+        refine_tokens,
+    )
+    for copied_start_token, copied_end_token, anchor_tokens in reversed(previous_chunks):
+        if failures >= max_failures:
+            break
+        chunks_checked += 1
+        match = token_dmp_window_match(
+            diff_match_patch,
+            clean_normalized,
+            copied_normalized,
+            clean_tokens,
+            copied_tokens,
+            inverted_index,
+            frequencies,
+            copied_start_token,
+            copied_end_token,
+            anchor_tokens,
+            min_coverage,
+            locator_min_score,
+            locator_max_candidates,
+            timeout,
+            max_end=current.match.normalized_start,
+            tie_preference="last",
+        )
+        if match is None:
+            failures += 1
+            continue
+        copied_start, copied_end = token_chunk_char_span(
+            copied_tokens,
+            copied_start_token,
+            copied_end_token,
+        )
+        current = DmpBoundarySearch(
+            match=match,
+            copied_start=copied_start,
+            copied_end=copied_end,
+            chunks_checked=chunks_checked,
+            copied_start_token=copied_start_token,
+            copied_end_token=copied_end_token,
+            locator="token+dmp",
+        )
+        failures = 0
+    return dmp_boundary_with_chunks(current, chunks_checked)
+
+
+def refine_token_dmp_end_boundary(
+    boundary: DmpBoundarySearch,
+    diff_match_patch,
+    clean_normalized: str,
+    copied_normalized: str,
+    clean_tokens,
+    copied_tokens,
+    inverted_index: dict[str, list[int]],
+    frequencies: Counter[str],
+    refine_tokens: int,
+    min_coverage: float,
+    locator_min_score: float,
+    locator_max_candidates: int,
+    timeout: float,
+    max_failures: int,
+) -> DmpBoundarySearch:
+    # Walks forward over later copied token chunks and verifies each with DMP.
+    current = boundary
+    chunks_checked = boundary.chunks_checked
+    failures = 0
+    next_chunks = token_chunks_in_range(
+        copied_tokens,
+        current.copied_end_token,
+        len(copied_tokens),
+        refine_tokens,
+    )
+    for copied_start_token, copied_end_token, anchor_tokens in next_chunks:
+        if failures >= max_failures:
+            break
+        chunks_checked += 1
+        match = token_dmp_window_match(
+            diff_match_patch,
+            clean_normalized,
+            copied_normalized,
+            clean_tokens,
+            copied_tokens,
+            inverted_index,
+            frequencies,
+            copied_start_token,
+            copied_end_token,
+            anchor_tokens,
+            min_coverage,
+            locator_min_score,
+            locator_max_candidates,
+            timeout,
+            min_start=current.match.normalized_end,
+            tie_preference="first",
+        )
+        if match is None:
+            failures += 1
+            continue
+        copied_start, copied_end = token_chunk_char_span(
+            copied_tokens,
+            copied_start_token,
+            copied_end_token,
+        )
+        current = DmpBoundarySearch(
+            match=match,
+            copied_start=copied_start,
+            copied_end=copied_end,
+            chunks_checked=chunks_checked,
+            copied_start_token=copied_start_token,
+            copied_end_token=copied_end_token,
+            locator="token+dmp",
+        )
+        failures = 0
+    return dmp_boundary_with_chunks(current, chunks_checked)
+
+
 def dmp_partial_match(
     clean_text: str,
     copied_text: str,
@@ -651,12 +1015,20 @@ def dmp_partial_match(
     timeout: float = 1.0,
     max_refine_failures: int = 2,
     copied_image_captions: list[str] | None = None,
+    locator_window_tokens: int = 60,
+    locator_refine_tokens: int = 20,
+    locator_min_score: float = 0.72,
+    locator_max_candidates: int = 240,
 ) -> tuple[str, str]:
     # Uses DMP anchor chunks to infer the clean span corresponding to pasted text.
     if chunk_size > 32:
         raise ValueError("chunk_size must be 32 or less for diff-match-patch match_main")
     if refine_chars < max(40, chunk_size):
         raise ValueError("refine_chars must be at least 40 and no smaller than chunk_size")
+    if locator_window_tokens < 8:
+        raise ValueError("locator_window_tokens must be at least 8")
+    if locator_refine_tokens < 8:
+        raise ValueError("locator_refine_tokens must be at least 8")
     diff_match_patch = load_diff_match_patch()
     clean_index = build_hybrid_text_index(clean_text)
     copied_text, stripped_caption_count = strip_copied_caption_phrases(
@@ -689,18 +1061,36 @@ def dmp_partial_match(
             ]
         )
         raise PartialExtractionError(message, report)
+    clean_tokens = tokenize_with_offsets(clean_normalized)
+    copied_tokens = tokenize_with_offsets(copied_normalized)
+    if len(copied_tokens) < 8:
+        message = "failed: not enough copied tokens for DMP matching"
+        report = "\n".join(
+            [
+                "Wikipedia DMP Partial Extraction Report",
+                "",
+                message,
+                f"Copied tokens: {len(copied_tokens)}",
+            ]
+        )
+        raise PartialExtractionError(message, report)
+    inverted_index = build_token_inverted_index(clean_tokens)
+    frequencies: Counter[str] = Counter(token.value for token in clean_tokens)
 
     match_started_at = time.perf_counter()
-    start_boundary = find_dmp_boundary_search(
+    start_boundary = find_token_dmp_boundary_search(
         diff_match_patch,
         clean_normalized,
         copied_normalized,
+        clean_tokens,
+        copied_tokens,
+        inverted_index,
+        frequencies,
         "start",
-        anchor_chars,
+        locator_window_tokens,
         min_coverage,
-        chunk_size,
-        max_chunks,
-        match_threshold,
+        locator_min_score,
+        locator_max_candidates,
         timeout,
     )
     if start_boundary is None:
@@ -711,34 +1101,40 @@ def dmp_partial_match(
                 "",
                 message,
                 f"Minimum coverage: {min_coverage:.3f}",
-                f"Anchor characters: {min(anchor_chars, len(copied_normalized))}",
+                f"Locator window tokens: {min(locator_window_tokens, len(copied_tokens))}",
             ]
         )
         raise PartialExtractionError(message, report)
-    start_boundary = refine_dmp_start_boundary(
+    start_boundary = refine_token_dmp_start_boundary(
         start_boundary,
         diff_match_patch,
         clean_normalized,
         copied_normalized,
-        refine_chars,
+        clean_tokens,
+        copied_tokens,
+        inverted_index,
+        frequencies,
+        locator_refine_tokens,
         min_coverage,
-        chunk_size,
-        max_chunks,
-        match_threshold,
+        locator_min_score,
+        locator_max_candidates,
         timeout,
         max_refine_failures,
     )
 
-    end_boundary = find_dmp_boundary_search(
+    end_boundary = find_token_dmp_boundary_search(
         diff_match_patch,
         clean_normalized,
         copied_normalized,
+        clean_tokens,
+        copied_tokens,
+        inverted_index,
+        frequencies,
         "end",
-        anchor_chars,
+        locator_window_tokens,
         min_coverage,
-        chunk_size,
-        max_chunks,
-        match_threshold,
+        locator_min_score,
+        locator_max_candidates,
         timeout,
         min_start=start_boundary.match.normalized_start,
     )
@@ -751,21 +1147,24 @@ def dmp_partial_match(
                 message,
                 f"Minimum coverage: {min_coverage:.3f}",
                 f"Start score: {start_boundary.match.score:.3f}",
-                f"Anchor characters: {min(anchor_chars, len(copied_normalized))}",
+                f"Locator window tokens: {min(locator_window_tokens, len(copied_tokens))}",
                 f"Start copied char chunk: {start_boundary.copied_start}-{start_boundary.copied_end}",
             ]
         )
         raise PartialExtractionError(message, report)
-    end_boundary = refine_dmp_end_boundary(
+    end_boundary = refine_token_dmp_end_boundary(
         end_boundary,
         diff_match_patch,
         clean_normalized,
         copied_normalized,
-        refine_chars,
+        clean_tokens,
+        copied_tokens,
+        inverted_index,
+        frequencies,
+        locator_refine_tokens,
         min_coverage,
-        chunk_size,
-        max_chunks,
-        match_threshold,
+        locator_min_score,
+        locator_max_candidates,
         timeout,
         max_refine_failures,
     )
@@ -809,24 +1208,34 @@ def dmp_partial_match(
         "",
         f"Clean normalized characters: {len(clean_normalized)}",
         f"Copied normalized characters: {len(copied_normalized)}",
+        f"Clean tokens: {len(clean_tokens)}",
+        f"Copied tokens: {len(copied_tokens)}",
         f"Start coverage: {start_match.score:.3f}",
         f"End coverage: {end_match.score:.3f}",
         f"Minimum coverage: {min_coverage:.3f}",
         f"Anchor characters: {min(anchor_chars, len(copied_normalized))}",
         f"Refine characters: {min(refine_chars, len(copied_normalized))}",
+        f"Locator window tokens: {min(locator_window_tokens, len(copied_tokens))}",
+        f"Locator refine tokens: {min(locator_refine_tokens, len(copied_tokens))}",
+        f"Locator minimum token score: {locator_min_score:.3f}",
+        f"Locator max candidates: {locator_max_candidates}",
         f"Chunk size: {min(chunk_size, 32)}",
         f"Max chunks: {max_chunks}",
         f"Max refine failures: {max_refine_failures}",
         f"Match threshold: {match_threshold:.3f}",
         f"Local DMP timeout: {timeout:.3f} seconds",
         f"DMP match runtime: {match_seconds:.3f} seconds",
+        f"Start locator: {start_boundary.locator}",
         f"Start copied char chunk: {start_boundary.copied_start}-{start_boundary.copied_end}",
+        f"Start copied token chunk: {start_boundary.copied_start_token}-{start_boundary.copied_end_token}",
         f"Start chunks checked/refined: {start_boundary.chunks_checked}",
         f"Start head unmatched: {'yes' if start_boundary.copied_start > 0 else 'no'}",
         f"Start candidates checked: {start_match.candidates_checked}",
         f"Start chunk offset: {start_match.chunk_offset}",
         f"Start matched at: {start_match.matched_at}",
+        f"End locator: {end_boundary.locator}",
         f"End copied char chunk: {end_boundary.copied_start}-{end_boundary.copied_end}",
+        f"End copied token chunk: {end_boundary.copied_start_token}-{end_boundary.copied_end_token}",
         f"End chunks checked/refined: {end_boundary.chunks_checked}",
         f"End tail unmatched: {'yes' if end_boundary.copied_end < len(copied_normalized) else 'no'}",
         f"End candidates checked: {end_match.candidates_checked}",
@@ -876,6 +1285,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             timeout=args.timeout,
             max_refine_failures=args.max_refine_failures,
             copied_image_captions=captions,
+            locator_window_tokens=args.locator_window_tokens,
+            locator_refine_tokens=args.locator_refine_tokens,
+            locator_min_score=args.locator_min_score,
+            locator_max_candidates=args.locator_max_candidates,
         )
         match_seconds = time.perf_counter() - match_started_at
         seconds = time.perf_counter() - started_at

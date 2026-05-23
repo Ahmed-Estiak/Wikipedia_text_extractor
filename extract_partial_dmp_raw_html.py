@@ -6,12 +6,15 @@ import argparse
 import re
 import sys
 import time
+from collections import Counter
 from html import unescape
 from pathlib import Path
 from typing import Iterable
 
 from extract_partial_dmp import (
-    find_dmp_boundary,
+    find_token_dmp_boundary_search,
+    refine_token_dmp_end_boundary,
+    refine_token_dmp_start_boundary,
     load_diff_match_patch,
     read_pasted_text,
 )
@@ -19,6 +22,7 @@ from wiki_text_extractor import (
     MAINTENANCE_MARKER_PATTERN,
     PageRequest,
     PartialExtractionError,
+    build_token_inverted_index,
     clean_wikipedia_html_with_references,
     fetch_page_html,
     finalize_partial_hybrid_output,
@@ -26,6 +30,7 @@ from wiki_text_extractor import (
     page_request_from_url,
     runtime_label,
     runtime_output_path,
+    tokenize_with_offsets,
     update_runtime_report,
     write_text_file,
 )
@@ -136,6 +141,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Local Diff Match Patch diff timeout in seconds",
+    )
+    parser.add_argument(
+        "--locator-window-tokens",
+        type=int,
+        default=60,
+        help="Token chunk size used to locate raw-HTML DMP start/end before local verification",
+    )
+    parser.add_argument(
+        "--locator-refine-tokens",
+        type=int,
+        default=20,
+        help="Token chunk size used to refine raw-HTML DMP boundaries after an anchor is found",
+    )
+    parser.add_argument(
+        "--locator-min-score",
+        type=float,
+        default=0.72,
+        help="Minimum token score required before raw-HTML DMP local verification",
+    )
+    parser.add_argument(
+        "--locator-max-candidates",
+        type=int,
+        default=240,
+        help="Maximum token candidate windows checked for each raw-HTML DMP locator chunk",
     )
     return parser
 
@@ -353,10 +382,18 @@ def raw_dmp_partial_match(
     max_chunks: int = 24,
     match_threshold: float = 0.45,
     timeout: float = 1.0,
+    locator_window_tokens: int = 60,
+    locator_refine_tokens: int = 20,
+    locator_min_score: float = 0.72,
+    locator_max_candidates: int = 240,
 ) -> tuple[str, str]:
     # Finds pasted boundaries in raw-visible HTML, then cleans only the matched raw slice.
     if chunk_size > 32:
         raise ValueError("chunk_size must be 32 or less for diff-match-patch match_main")
+    if locator_window_tokens < 8:
+        raise ValueError("locator_window_tokens must be at least 8")
+    if locator_refine_tokens < 8:
+        raise ValueError("locator_refine_tokens must be at least 8")
     diff_match_patch = load_diff_match_patch()
     raw_visible, raw_visible_map = raw_html_visible_text_with_map(html)
     raw_normalized, raw_map = normalize_raw_dmp_text_with_map(raw_visible, raw_visible_map)
@@ -373,21 +410,39 @@ def raw_dmp_partial_match(
             ]
         )
         raise PartialExtractionError(message, report)
+    raw_tokens = tokenize_with_offsets(raw_normalized)
+    copied_tokens = tokenize_with_offsets(copied_normalized)
+    if len(copied_tokens) < 8:
+        message = "failed: not enough copied tokens for raw-HTML DMP matching"
+        report = "\n".join(
+            [
+                "Wikipedia Raw HTML DMP Partial Extraction Report",
+                "",
+                message,
+                f"Copied tokens: {len(copied_tokens)}",
+            ]
+        )
+        raise PartialExtractionError(message, report)
+    inverted_index = build_token_inverted_index(raw_tokens)
+    frequencies: Counter[str] = Counter(token.value for token in raw_tokens)
 
     match_started_at = time.perf_counter()
-    start_match = find_dmp_boundary(
+    start_boundary = find_token_dmp_boundary_search(
         diff_match_patch,
         raw_normalized,
         copied_normalized,
+        raw_tokens,
+        copied_tokens,
+        inverted_index,
+        frequencies,
         "start",
+        locator_window_tokens,
         min_coverage,
-        anchor_chars,
-        chunk_size,
-        max_chunks,
-        match_threshold,
+        locator_min_score,
+        locator_max_candidates,
         timeout,
     )
-    if start_match is None:
+    if start_boundary is None:
         message = "failed: raw-HTML DMP start boundary did not meet the minimum coverage"
         report = "\n".join(
             [
@@ -395,25 +450,45 @@ def raw_dmp_partial_match(
                 "",
                 message,
                 f"Minimum coverage: {min_coverage:.3f}",
+                f"Locator window tokens: {min(locator_window_tokens, len(copied_tokens))}",
             ]
         )
         raise PartialExtractionError(message, report)
-
-    end_match = find_dmp_boundary(
+    start_boundary = refine_token_dmp_start_boundary(
+        start_boundary,
         diff_match_patch,
         raw_normalized,
         copied_normalized,
-        "end",
+        raw_tokens,
+        copied_tokens,
+        inverted_index,
+        frequencies,
+        locator_refine_tokens,
         min_coverage,
-        anchor_chars,
-        chunk_size,
-        max_chunks,
-        match_threshold,
+        locator_min_score,
+        locator_max_candidates,
         timeout,
-        min_start=start_match.normalized_start,
+        2,
+    )
+
+    end_boundary = find_token_dmp_boundary_search(
+        diff_match_patch,
+        raw_normalized,
+        copied_normalized,
+        raw_tokens,
+        copied_tokens,
+        inverted_index,
+        frequencies,
+        "end",
+        locator_window_tokens,
+        min_coverage,
+        locator_min_score,
+        locator_max_candidates,
+        timeout,
+        min_start=start_boundary.match.normalized_start,
     )
     match_seconds = time.perf_counter() - match_started_at
-    if end_match is None:
+    if end_boundary is None:
         message = "failed: raw-HTML DMP end boundary did not meet the minimum coverage"
         report = "\n".join(
             [
@@ -421,10 +496,29 @@ def raw_dmp_partial_match(
                 "",
                 message,
                 f"Minimum coverage: {min_coverage:.3f}",
-                f"Start score: {start_match.score:.3f}",
+                f"Start score: {start_boundary.match.score:.3f}",
+                f"Locator window tokens: {min(locator_window_tokens, len(copied_tokens))}",
             ]
         )
         raise PartialExtractionError(message, report)
+    end_boundary = refine_token_dmp_end_boundary(
+        end_boundary,
+        diff_match_patch,
+        raw_normalized,
+        copied_normalized,
+        raw_tokens,
+        copied_tokens,
+        inverted_index,
+        frequencies,
+        locator_refine_tokens,
+        min_coverage,
+        locator_min_score,
+        locator_max_candidates,
+        timeout,
+        2,
+    )
+    start_match = start_boundary.match
+    end_match = end_boundary.match
 
     start_visible, _ = raw_html_span_from_normalized_map(
         raw_visible_normalized_map,
@@ -486,18 +580,28 @@ def raw_dmp_partial_match(
         f"Raw visible characters: {len(raw_visible)}",
         f"Raw normalized characters: {len(raw_normalized)}",
         f"Copied normalized characters: {len(copied_normalized)}",
+        f"Raw normalized tokens: {len(raw_tokens)}",
+        f"Copied tokens: {len(copied_tokens)}",
         f"Start coverage: {start_match.score:.3f}",
         f"End coverage: {end_match.score:.3f}",
         f"Minimum coverage: {min_coverage:.3f}",
         f"Anchor characters: {min(anchor_chars, len(copied_normalized))}",
+        f"Locator window tokens: {min(locator_window_tokens, len(copied_tokens))}",
+        f"Locator refine tokens: {min(locator_refine_tokens, len(copied_tokens))}",
+        f"Locator minimum token score: {locator_min_score:.3f}",
+        f"Locator max candidates: {locator_max_candidates}",
         f"Chunk size: {min(chunk_size, 32)}",
         f"Max chunks: {max_chunks}",
         f"Match threshold: {match_threshold:.3f}",
         f"Local DMP timeout: {timeout:.3f} seconds",
         f"DMP match runtime: {match_seconds:.3f} seconds",
+        f"Start locator: {start_boundary.locator}",
+        f"Start copied token chunk: {start_boundary.copied_start_token}-{start_boundary.copied_end_token}",
         f"Start candidates checked: {start_match.candidates_checked}",
         f"Start chunk offset: {start_match.chunk_offset}",
         f"Start matched at normalized raw-visible offset: {start_match.matched_at}",
+        f"End locator: {end_boundary.locator}",
+        f"End copied token chunk: {end_boundary.copied_start_token}-{end_boundary.copied_end_token}",
         f"End candidates checked: {end_match.candidates_checked}",
         f"End chunk offset: {end_match.chunk_offset}",
         f"End matched at normalized raw-visible offset: {end_match.matched_at}",
@@ -539,6 +643,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             max_chunks=args.max_chunks,
             match_threshold=args.match_threshold,
             timeout=args.timeout,
+            locator_window_tokens=args.locator_window_tokens,
+            locator_refine_tokens=args.locator_refine_tokens,
+            locator_min_score=args.locator_min_score,
+            locator_max_candidates=args.locator_max_candidates,
         )
         match_seconds = time.perf_counter() - match_started_at
         seconds = time.perf_counter() - started_at

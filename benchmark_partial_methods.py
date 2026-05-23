@@ -496,6 +496,10 @@ def main(argv: Iterable[str] | None = None) -> int:
                 refine_chars=args.dmp_refine_chars,
                 timeout=args.dmp_timeout,
                 copied_image_captions=captions,
+                locator_window_tokens=args.token_window,
+                locator_refine_tokens=args.token_refine_tokens,
+                locator_min_score=args.token_min_score,
+                locator_max_candidates=args.token_max_candidates,
             )
             start_score = report_value(report, "Start coverage")
             end_score = report_value(report, "End coverage")
@@ -539,6 +543,10 @@ def main(argv: Iterable[str] | None = None) -> int:
                 min_coverage=args.raw_dmp_min_coverage,
                 anchor_chars=args.raw_dmp_anchor_chars,
                 timeout=args.raw_dmp_timeout,
+                locator_window_tokens=args.raw_token_window,
+                locator_refine_tokens=args.token_refine_tokens,
+                locator_min_score=args.raw_token_min_score,
+                locator_max_candidates=args.raw_token_max_candidates,
             )
             start_score = report_value(report, "Start coverage")
             end_score = report_value(report, "End coverage")
@@ -567,7 +575,9 @@ def main(argv: Iterable[str] | None = None) -> int:
                 run_dmp,
                 (
                     f"min_coverage={args.dmp_min_coverage:.3f};anchor_chars={args.dmp_anchor_chars};"
-                    f"refine_chars={args.dmp_refine_chars};timeout={args.dmp_timeout:.3f}"
+                    f"refine_chars={args.dmp_refine_chars};locator_window={args.token_window};"
+                    f"locator_refine={args.token_refine_tokens};locator_min_score={args.token_min_score:.3f};"
+                    f"locator_max_candidates={args.token_max_candidates};timeout={args.dmp_timeout:.3f}"
                 ),
             ),
             (
@@ -583,7 +593,9 @@ def main(argv: Iterable[str] | None = None) -> int:
                 run_dmp_raw_html,
                 (
                     f"min_coverage={args.raw_dmp_min_coverage:.3f};"
-                    f"anchor_chars={args.raw_dmp_anchor_chars};timeout={args.raw_dmp_timeout:.3f}"
+                    f"anchor_chars={args.raw_dmp_anchor_chars};locator_window={args.raw_token_window};"
+                    f"locator_refine={args.token_refine_tokens};locator_min_score={args.raw_token_min_score:.3f};"
+                    f"locator_max_candidates={args.raw_token_max_candidates};timeout={args.raw_dmp_timeout:.3f}"
                 ),
             ),
         ]

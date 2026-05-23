@@ -760,6 +760,10 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertEqual(args.min_coverage, 0.72)
         self.assertEqual(args.anchor_chars, 300)
         self.assertEqual(args.refine_chars, 100)
+        self.assertEqual(args.locator_window_tokens, 60)
+        self.assertEqual(args.locator_refine_tokens, 20)
+        self.assertEqual(args.locator_min_score, 0.72)
+        self.assertEqual(args.locator_max_candidates, 240)
         self.assertEqual(args.timeout, 1.0)
 
     def test_partial_benchmark_cli_defaults_to_latex_math(self):
@@ -1160,6 +1164,39 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
                 if child.is_dir():
                     child.rmdir()
             root.rmdir() if root.exists() else None
+
+    def test_dmp_uses_token_locator_for_mid_page_copied_start(self):
+        # Verifies DMP can locate copied text that starts far from the beginning of the page.
+        from extract_partial_dmp import dmp_partial_match
+
+        clean_text = (
+            "Intro filler text keeps the target far from the preferred DMP location. " * 20
+            + "\n\n"
+            + "Flash attention is an implementation that reduces the memory needs and "
+            + "increases efficiency without sacrificing accuracy. It achieves this by "
+            + "partitioning the attention computation into smaller blocks that fit into "
+            + "GPU memory while increasing computational efficiency.\n\n"
+            + "== FlexAttention ==\n\n"
+            + "FlexAttention is an attention kernel developed by Meta that allows users "
+            + "to modify attention scores prior to softmax."
+        )
+        copied_text = (
+            "and increases efficiency without sacrificing accuracy. It achieves this by "
+            "partitioning the attention computation into smaller blocks that fit into "
+            "GPU memory while increasing computational efficiency.\n\n"
+            "FlexAttention\n"
+            "FlexAttention is an attention kernel developed by Meta that allows users "
+            "to modify attention scores prior to softmax."
+        )
+
+        try:
+            text, report = dmp_partial_match(clean_text, copied_text)
+        except RuntimeError as exc:
+            self.skipTest(str(exc))
+
+        self.assertTrue(text.startswith("Flash attention is an implementation"))
+        self.assertIn("== FlexAttention ==", text)
+        self.assertIn("Start locator: token+dmp", report)
 
 
     def test_sentence_window_chunks_step_three_with_tail_backfill(self):

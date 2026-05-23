@@ -66,13 +66,13 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "Python is a programming language.\n\nIt emphasizes readability.",
         )
 
-    def test_skipped_table_void_tags_do_not_hide_later_article_text(self):
-        # Verifies void tags inside skipped tables do not keep the parser stuck in skip mode.
+    def test_skipped_table_void_tags_do_not_leak_or_hide_later_article_text(self):
+        # Verifies self-closing void tags keep skipped tables hidden without hiding later text.
         html = """
         <div class="mw-parser-output">
           <p>Before table.</p>
           <table class="wikitable">
-            <tr><td>Hidden row <img src="hidden.png" /></td></tr>
+            <tr><td>Hidden row <img src="hidden.png" /><link rel="x" /><meta name="x" />Still hidden</td></tr>
           </table>
           <h2 id="After_table">After table</h2>
           <p>Visible article text after the table.</p>

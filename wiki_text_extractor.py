@@ -433,6 +433,12 @@ class WikipediaTextParser(HTMLParser):
         if tag in self.BLOCK_TAGS:
             self._add_break()
 
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # Treats self-closing void tags as start-only so skipped blocks do not close early.
+        self.handle_starttag(tag, attrs)
+        if tag not in self.VOID_TAGS:
+            self.handle_endtag(tag)
+
     def handle_endtag(self, tag: str) -> None:
         # Closes parser state for skipped blocks, lists, headings, superscripts, and math spans.
         if self._reference_marker_buffer is not None:

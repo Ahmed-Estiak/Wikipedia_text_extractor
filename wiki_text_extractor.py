@@ -359,7 +359,8 @@ class WikipediaTextParser(HTMLParser):
             return
 
         if self._skip_depth:
-            self._skip_depth += 1
+            if tag not in self.VOID_TAGS:
+                self._skip_depth += 1
             return
 
         if tag == "ol":
@@ -420,7 +421,8 @@ class WikipediaTextParser(HTMLParser):
             or classes.intersection(self.SKIP_CLASSES)
             or element_id in self.SKIP_IDS
         ):
-            self._skip_depth += 1
+            if tag not in self.VOID_TAGS:
+                self._skip_depth += 1
             return
 
         if heading_level is not None:

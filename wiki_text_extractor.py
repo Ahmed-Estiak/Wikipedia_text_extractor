@@ -3643,11 +3643,12 @@ def extract_partial_hybrid_text(
                 else start_matches
             )
             if start_candidates:
+                start_candidate = start_candidates[-1] if matched_headings else start_candidates[0]
                 citation_start_sentence = clean_index.sentences[
-                    start_candidates[0][0].sentence_index
+                    start_candidate[0].sentence_index
                 ]
                 citation_end_sentence = clean_index.sentences[
-                    start_candidates[0][1].sentence_index
+                    start_candidate[1].sentence_index
                 ]
                 citation_start = citation_start_sentence.start
                 coarse_start = min(coarse_start, citation_start) if matched_headings else citation_start

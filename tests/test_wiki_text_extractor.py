@@ -1271,6 +1271,34 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("Start structural guard applied: citation", result.report)
         self.assertNotIn("Outside lead", result.text)
 
+    def test_hybrid_start_citation_uses_nearest_match_before_heading(self):
+        # Verifies repeated citation sequences above a heading do not pull start too far upward.
+        clean = (
+            "== Variants ==\n\n"
+            "- Bahdanau-style attention appears in an earlier list.[11]\n\n"
+            "- Luong-style attention appears in an earlier list.[38]\n\n"
+            "Middle unrelated section should stay out.\n\n"
+            "== Bahdanau (additive) attention ==\n\n"
+            "Bahdanau equations appear close to the copied heading.[11]\n\n"
+            "== Luong attention (general) ==\n\n"
+            "Luong equations appear close to the copied heading.[38]\n\n"
+            "== Self-attention ==\n\n"
+            "Self-attention body starts here."
+        )
+        copied = (
+            "Bahdanau equations appear close to the copied heading.[11]\n\n"
+            "Luong equations appear close to the copied heading.[38]\n\n"
+            "Self-attention\n\n"
+            "Self-attention body starts here."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertTrue(result.text.startswith("Bahdanau equations appear close"))
+        self.assertIn("== Self-attention ==", result.text)
+        self.assertNotIn("== Variants ==", result.text)
+        self.assertNotIn("Middle unrelated section", result.text)
+
     def test_hybrid_end_structural_guard_keeps_citation_sentence(self):
         # Verifies a found end citation sentence cannot be cut by an earlier perfect window.
         clean = (

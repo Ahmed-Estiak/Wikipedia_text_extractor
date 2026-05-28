@@ -1238,12 +1238,64 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
             "In the figures below, W"
         )
 
-        result = extract_partial_hybrid_text(clean, copied)
+        result = extract_partial_hybrid_text(clean, copied, threshold=0.95)
 
         self.assertIn("For convolutional neural networks", result.text)
         self.assertIn("re-weighting coefficients", result.text)
         self.assertIn("End search range: next heading", result.report)
         self.assertNotIn("Optimization text should stay outside", result.text)
+
+    def test_hybrid_start_structural_guard_keeps_citation_sentence(self):
+        # Verifies a found start citation sentence cannot be skipped by a later window match.
+        clean = (
+            "Outside lead should stay out.\n\n"
+            "Short start.[1] "
+            "Second cited sentence follows the noisy copied lines with enough words.[2] "
+            "Third cited sentence confirms the structural start with enough words.[3] "
+            "Fourth ordinary sentence completes the match with enough words.\n\n"
+            "Outside tail should stay out."
+        )
+        copied = (
+            "Short start.[1]\n"
+            "Copied-only figure caption one.\n"
+            "Copied-only figure caption two.\n"
+            "Second cited sentence follows the noisy copied lines with enough words.[2] "
+            "Third cited sentence confirms the structural start with enough words.[3] "
+            "Fourth ordinary sentence completes the match with enough words."
+        )
+
+        result = extract_partial_hybrid_text(clean, copied, threshold=0.95)
+
+        self.assertTrue(result.text.startswith("Short start."))
+        self.assertIn("Second cited sentence follows", result.text)
+        self.assertIn("Start structural guard applied: citation", result.report)
+        self.assertNotIn("Outside lead", result.text)
+
+    def test_hybrid_end_structural_guard_keeps_citation_sentence(self):
+        # Verifies a found end citation sentence cannot be cut by an earlier perfect window.
+        clean = (
+            "Outside lead should stay out.\n\n"
+            "First cited sentence starts the selected range with enough words.[1] "
+            "Second cited sentence keeps the early window stable with enough words.[2] "
+            "Third ordinary sentence makes the early window exact with enough words. "
+            "Short end.[3]\n\n"
+            "Outside tail should stay out."
+        )
+        copied = (
+            "First cited sentence starts the selected range with enough words.[1] "
+            "Second cited sentence keeps the early window stable with enough words.[2] "
+            "Third ordinary sentence makes the early window exact with enough words. "
+            "Copied-only figure caption one. "
+            "Copied-only figure caption two. "
+            "Short end.[3]"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied, threshold=0.95)
+
+        self.assertIn("Third ordinary sentence makes the early window exact with enough words.", result.text)
+        self.assertIn("Short end.", result.text)
+        self.assertIn("End structural guard applied: citation", result.report)
+        self.assertNotIn("Outside tail", result.text)
 
 
     def test_sentence_window_chunks_step_three_with_tail_backfill(self):

@@ -3863,6 +3863,32 @@ def extract_partial_hybrid_text(
             confidence = "medium"
         report_lines.append(f"End partial sentence score: {partial_end[1]:.3f}")
 
+    start_guards: list[tuple[str, int]] = []
+    if first_heading is not None:
+        start_guards.append(("heading", first_heading.start))
+    if start_citation_clean_start is not None:
+        start_guards.append(("citation", start_citation_clean_start))
+    if start_guards:
+        start_guard_source, start_guard = min(start_guards, key=lambda item: item[1])
+        if start > start_guard:
+            start = start_guard
+            if confidence == "low":
+                confidence = "medium"
+            report_lines.append(f"Start structural guard applied: {start_guard_source}")
+
+    end_guards: list[tuple[str, int]] = []
+    if last_heading is not None:
+        end_guards.append(("heading", last_heading.end))
+    if end_citation_clean_end is not None:
+        end_guards.append(("citation", end_citation_clean_end))
+    if end_guards:
+        end_guard_source, end_guard = max(end_guards, key=lambda item: item[1])
+        if end < end_guard:
+            end = end_guard
+            if confidence == "low":
+                confidence = "medium"
+            report_lines.append(f"End structural guard applied: {end_guard_source}")
+
     if start >= end:
         message = "failed: hybrid boundaries are invalid"
         raise PartialExtractionError(message, "\n".join(report_lines + ["", message]))

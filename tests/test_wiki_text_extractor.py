@@ -1198,6 +1198,53 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("== FlexAttention ==", text)
         self.assertIn("Start locator: token+dmp", report)
 
+    def test_hybrid_end_prefers_late_match_from_broader_range(self):
+        # Verifies a narrow early range cannot stop the hybrid end before later copied sentences.
+        clean = (
+            "Lead text before copied start. Thus, soft attention weights work better.\n\n"
+            "== Variants ==\n\n"
+            "Many variants of attention implement soft weights, such as\n\n"
+            "- Fast weight programmers. The slow network learns by gradient descent. "
+            "It was later renamed as linearized self-attention.\n\n"
+            "- Bahdanau-style attention, also referred to as additive attention,\n\n"
+            "- Luong-style attention, which is known as multiplicative attention,\n\n"
+            "- Early attention mechanisms similar to modern self-attention were proposed. "
+            "However, self-attention was introduced in 2017 and used in the Transformer model.\n\n"
+            "- Positional attention and factorized positional attention.\n\n"
+            "For convolutional neural networks, attention mechanisms can be distinguished by the dimension, "
+            "namely spatial attention, channel attention, or combinations.\n\n"
+            "These variants recombine the encoder-side inputs to redistribute those effects to each target output. "
+            "Often, a correlation-style matrix of dot products provides the re-weighting coefficients. "
+            "In the figures below, W is the matrix of context attention weights, similar to the formula above.\n\n"
+            "== Optimizations ==\n\n"
+            "Optimization text should stay outside."
+        )
+        copied = (
+            "soft attention weights work better.\n\n"
+            "Variants\n\n"
+            "Comparison of the data flow in CNN, RNN, and self-attention\n"
+            "Many variants of attention implement soft weights, such as\n\n"
+            "Fast weight programmers. The slow network learns by gradient descent. "
+            "It was later renamed as linearized self-attention.\n"
+            "Bahdanau-style attention, also referred to as additive attention,\n"
+            "Luong-style attention, which is known as multiplicative attention,\n"
+            "Early attention mechanisms similar to modern self-attention were proposed. "
+            "However, self-attention was introduced in 2017 and used in the Transformer model.\n"
+            "Positional attention and factorized positional attention.\n"
+            "For convolutional neural networks, attention mechanisms can be distinguished by the dimension, "
+            "namely spatial attention, channel attention, or combinations.\n\n"
+            "These variants recombine the encoder-side inputs to redistribute those effects to each target output. "
+            "Often, a correlation-style matrix of dot products provides the re-weighting coefficients. "
+            "In the figures below, W"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("For convolutional neural networks", result.text)
+        self.assertIn("re-weighting coefficients", result.text)
+        self.assertIn("End search range: next heading", result.report)
+        self.assertNotIn("Optimization text should stay outside", result.text)
+
 
     def test_sentence_window_chunks_step_three_with_tail_backfill(self):
         # Verifies copied chunks step by three sentences and backfill short tails to three.

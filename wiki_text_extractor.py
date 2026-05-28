@@ -2725,8 +2725,25 @@ def find_sentence_window_match_in_ranges(
     threshold: float,
     allow_short_fallback: bool,
 ) -> tuple[tuple[int, int, int, int, float], tuple[int, int, str]] | None:
-    # Runs sentence-window matching through staged ranges in order.
-    for range_start, range_end, label in ranges:
+    # Start keeps staged order; end scans all ranges to avoid stopping before the copied tail.
+    if not reverse:
+        for range_start, range_end, label in ranges:
+            match = find_sentence_window_match_with_short_fallback(
+                copied_sentences,
+                clean_sentences,
+                range_start,
+                range_end,
+                reverse,
+                threshold,
+                allow_short_fallback=allow_short_fallback,
+            )
+            if match is not None:
+                return match, (range_start, range_end, label)
+        return None
+
+    best: tuple[tuple[int, int, int, int, float], tuple[int, int, str]] | None = None
+    best_key: tuple[float, ...] | None = None
+    for range_order, (range_start, range_end, label) in enumerate(ranges):
         match = find_sentence_window_match_with_short_fallback(
             copied_sentences,
             clean_sentences,
@@ -2736,9 +2753,13 @@ def find_sentence_window_match_in_ranges(
             threshold,
             allow_short_fallback=allow_short_fallback,
         )
-        if match is not None:
-            return match, (range_start, range_end, label)
-    return None
+        if match is None:
+            continue
+        key = (match[1], match[0], match[4], -range_order)
+        if best_key is None or key > best_key:
+            best = (match, (range_start, range_end, label))
+            best_key = key
+    return best
 
 
 def find_sentence_window_match_with_short_fallback(

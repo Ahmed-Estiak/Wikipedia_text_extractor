@@ -1963,6 +1963,77 @@ def citation_sequence_matches(
     return matches
 
 
+def unicode_words(value: str) -> list[str]:
+    # Tokenizes words across English, Bangla, Finnish, and other Unicode scripts.
+    return [
+        match.group(0).casefold()
+        for match in re.finditer(r"[^\W_]+", normalize_for_match(value), flags=re.UNICODE)
+    ]
+
+
+def citation_context_words(text: str, marker_start: int, marker_end: int, side: str, count: int) -> list[str]:
+    # Gets words immediately beside a citation marker for repeated-sequence disambiguation.
+    if count <= 0:
+        return []
+    if side == "after":
+        return unicode_words(text[marker_end : marker_end + 240])[:count]
+    return unicode_words(text[max(0, marker_start - 240) : marker_start])[-count:]
+
+
+def citation_context_matches(left: list[str], right: list[str]) -> bool:
+    # Prefers exact adjacent words, then allows near-complete token overlap as a fallback.
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    left_set = set(left)
+    right_set = set(right)
+    return bool(left_set and right_set) and len(left_set & right_set) / max(len(left_set), len(right_set)) >= 0.80
+
+
+def disambiguate_repeated_citation_match(
+    clean_text: str,
+    copied_text: str,
+    matches: list[tuple[CitationOccurrence, CitationOccurrence]],
+    copied_occurrences: list[tuple[str, int, int]],
+    sequence_size: int,
+    side: str,
+) -> tuple[CitationOccurrence, CitationOccurrence] | None:
+    # Uses words beside copied/clean citation markers to choose among repeated citation sequences.
+    if not matches or sequence_size <= 0 or len(copied_occurrences) < sequence_size:
+        return None
+    if side == "start":
+        copied_marker = copied_occurrences[0]
+        marker_index = 0
+        context_side = "after"
+    else:
+        copied_marker = copied_occurrences[-1]
+        marker_index = -1
+        context_side = "before"
+    for word_count in (2, 3):
+        copied_context = citation_context_words(
+            copied_text,
+            copied_marker[1],
+            copied_marker[2],
+            context_side,
+            word_count,
+        )
+        if not copied_context:
+            continue
+        for match in matches:
+            candidate_marker = match[0] if marker_index == 0 else match[1]
+            clean_context = citation_context_words(
+                clean_text,
+                candidate_marker.start,
+                candidate_marker.end,
+                context_side,
+                word_count,
+            )
+            if citation_context_matches(copied_context, clean_context):
+                return match
+    return None
+
+
 def text_tokens(text: str) -> set[str]:
     # Tokenizes normalized text for cheap overlap filtering.
     return set(re.findall(r"[a-z0-9]+", normalize_for_match(text)))
@@ -3633,7 +3704,7 @@ def extract_partial_hybrid_text(
         start_matches = citation_sequence_matches(clean_index.citations, start_sequence)
         end_matches = citation_sequence_matches(clean_index.citations, end_sequence)
         if start_matches:
-            start_candidates = (
+            all_start_candidates = (
                 [
                     match
                     for match in start_matches
@@ -3642,8 +3713,20 @@ def extract_partial_hybrid_text(
                 if matched_headings
                 else start_matches
             )
+            start_candidates = list(all_start_candidates)
+            repeated_start_sequence = len(start_candidates) > 1
+            if repeated_start_sequence:
+                disambiguated_start = disambiguate_repeated_citation_match(
+                    clean_text,
+                    copied_matching_text,
+                    start_candidates,
+                    copied_citation_occurrences[: len(start_sequence)],
+                    len(start_sequence),
+                    "start",
+                )
+                start_candidates = [disambiguated_start] if disambiguated_start is not None else []
             if start_candidates:
-                start_candidate = start_candidates[-1] if matched_headings else start_candidates[0]
+                start_candidate = start_candidates[0]
                 citation_start_sentence = clean_index.sentences[
                     start_candidate[0].sentence_index
                 ]
@@ -3659,10 +3742,12 @@ def extract_partial_hybrid_text(
                         len(start_sequence) - 1
                     ][2]
                 report_lines.append(f"Start citation sequence: {', '.join(start_sequence)}")
+            elif repeated_start_sequence:
+                report_lines.append("Start citation sequence ambiguous; skipped citation anchor.")
             elif matched_headings:
                 report_lines.append("Start citation sequence ignored: all matches are below first heading.")
         if end_matches:
-            end_candidates = (
+            all_end_candidates = (
                 [
                     match
                     for match in end_matches
@@ -3671,12 +3756,25 @@ def extract_partial_hybrid_text(
                 if matched_headings
                 else end_matches
             )
+            end_candidates = list(all_end_candidates)
+            repeated_end_sequence = len(end_candidates) > 1
+            if repeated_end_sequence:
+                disambiguated_end = disambiguate_repeated_citation_match(
+                    clean_text,
+                    copied_matching_text,
+                    end_candidates,
+                    copied_citation_occurrences[-len(end_sequence) :],
+                    len(end_sequence),
+                    "end",
+                )
+                end_candidates = [disambiguated_end] if disambiguated_end is not None else []
             if end_candidates:
+                end_candidate = end_candidates[0]
                 citation_start_sentence = clean_index.sentences[
-                    end_candidates[-1][0].sentence_index
+                    end_candidate[0].sentence_index
                 ]
                 citation_end_sentence = clean_index.sentences[
-                    end_candidates[-1][1].sentence_index
+                    end_candidate[1].sentence_index
                 ]
                 citation_end = citation_end_sentence.end
                 coarse_end = max(coarse_end, citation_end) if matched_headings else citation_end
@@ -3687,6 +3785,8 @@ def extract_partial_hybrid_text(
                         -len(end_sequence)
                     ][1]
                 report_lines.append(f"End citation sequence: {', '.join(end_sequence)}")
+            elif repeated_end_sequence:
+                report_lines.append("End citation sequence ambiguous; skipped citation anchor.")
             elif matched_headings:
                 report_lines.append("End citation sequence ignored: all matches are above last heading.")
 

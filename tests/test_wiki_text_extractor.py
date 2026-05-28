@@ -1325,6 +1325,31 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
         self.assertIn("End structural guard applied: citation", result.report)
         self.assertNotIn("Outside tail", result.text)
 
+    def test_hybrid_end_citation_context_disambiguates_repeated_sequence(self):
+        # Verifies repeated end citation sequences use nearby copied words instead of latest match.
+        clean = (
+            "== Target ==\n\n"
+            "Target opening sentence belongs in the output.\n\n"
+            "Correct closing context appears before the first marker.[7] "
+            "Distinct copied words appear before the final marker.[8]\n\n"
+            "Unrelated repeated context appears before the first marker.[7] "
+            "Wrong later words appear before the final marker.[8]\n\n"
+            "== Next ==\n\n"
+            "Next section should stay out."
+        )
+        copied = (
+            "Target\n\n"
+            "Target opening sentence belongs in the output.\n\n"
+            "Correct closing context appears before the first marker.[7] "
+            "Distinct copied words appear before the final marker.[8]"
+        )
+
+        result = extract_partial_hybrid_text(clean, copied)
+
+        self.assertIn("Distinct copied words appear before the final marker.", result.text)
+        self.assertNotIn("Wrong later words appear", result.text)
+        self.assertNotIn("== Next ==", result.text)
+
 
     def test_sentence_window_chunks_step_three_with_tail_backfill(self):
         # Verifies copied chunks step by three sentences and backfill short tails to three.

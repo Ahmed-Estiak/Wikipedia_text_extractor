@@ -2,6 +2,8 @@ from pathlib import Path
 import csv
 import importlib.util
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from wiki_text_extractor import (
     PageRequest,
@@ -738,6 +740,56 @@ class CleanWikipediaHtmlTests(unittest.TestCase):
 
         self.assertEqual(args.math, "latex")
         self.assertEqual(args.references, "none")
+
+    def test_partial_best_cli_defaults_to_shared_fallback(self):
+        # Verifies the primary partial command defaults to the shared raw-DMP fallback chain.
+        from extract_partial_best import build_parser
+
+        args = build_parser().parse_args(["--url", "https://en.wikipedia.org/wiki/Kuiper_belt"])
+
+        self.assertEqual(args.math, "latex")
+        self.assertEqual(args.references, "none")
+        self.assertEqual(args.raw_dmp_min_coverage, 0.50)
+        self.assertEqual(args.raw_dmp_locator_window_tokens, 60)
+        self.assertEqual(args.raw_token_window, 60)
+
+    def test_partial_best_reuses_shared_work_across_fallback(self):
+        # Verifies a failed raw-DMP attempt can fall back to hybrid without refetching/reparsing raw visible text.
+        import extract_partial_best
+
+        page = PageRequest("Example", "en")
+        ctx = extract_partial_best.PartialBestContext(page, Path("input_text/partial_input.txt"), "latex")
+
+        def fail_raw_dmp(*_args, **_kwargs):
+            raise PartialExtractionError("failed raw dmp", "raw dmp report")
+
+        with patch.object(extract_partial_best, "read_pasted_text", return_value="Copied text"), \
+            patch.object(extract_partial_best, "fetch_page_html", return_value="<p>HTML</p>") as fetch, \
+            patch.object(
+                extract_partial_best,
+                "raw_html_visible_text_with_map",
+                return_value=("HTML", [0, 1, 2, 3]),
+            ) as raw_visible, \
+            patch.object(extract_partial_best, "raw_dmp_partial_match", side_effect=fail_raw_dmp), \
+            patch.object(extract_partial_best, "clean_wikipedia_html_with_references", return_value="Clean text") as clean, \
+            patch.object(extract_partial_best, "extract_reference_entries_from_html", return_value={}), \
+            patch.object(extract_partial_best, "extract_image_captions_from_html", return_value=[]), \
+            patch.object(
+                extract_partial_best,
+                "extract_partial_hybrid_text",
+                return_value=SimpleNamespace(text="Hybrid output", report="hybrid report"),
+            ) as hybrid, \
+            patch.object(extract_partial_best, "raw_token_partial_match") as token:
+            result = extract_partial_best.extract_partial_best_text(ctx)
+
+        self.assertEqual(result.method, "hybrid")
+        self.assertEqual(result.text, "Hybrid output")
+        self.assertEqual([attempt.method for attempt in result.attempts], ["dmp_raw_html", "hybrid"])
+        fetch.assert_called_once()
+        raw_visible.assert_called_once()
+        clean.assert_called_once()
+        hybrid.assert_called_once()
+        token.assert_not_called()
 
     def test_partial_token_cli_defaults_to_latex_math_and_no_fuzzy(self):
         # Verifies token partial defaults keep LaTeX math and avoid fuzzy confirmation.

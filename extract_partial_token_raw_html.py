@@ -127,6 +127,7 @@ def raw_token_partial_match(
     max_candidates: int = 240,
     confirm_mode: str = "none",
     snap_sentences: bool = True,
+    raw_visible_data: tuple[str, list[int]] | None = None,
 ) -> tuple[str, str]:
     # Uses one start anchor and one end anchor against raw-visible HTML, then cleans the raw slice.
     if confirm_mode not in TOKEN_CONFIRM_MODES:
@@ -134,7 +135,7 @@ def raw_token_partial_match(
     if window_tokens < 8:
         raise ValueError("window_tokens must be at least 8")
 
-    raw_visible, raw_visible_map = raw_html_visible_text_with_map(html)
+    raw_visible, raw_visible_map = raw_visible_data or raw_html_visible_text_with_map(html)
     copied_matching_text = MAINTENANCE_MARKER_PATTERN.sub("", copied_text)
     raw_tokens = tokenize_with_offsets(raw_visible)
     copied_tokens = tokenize_with_offsets(copied_matching_text)

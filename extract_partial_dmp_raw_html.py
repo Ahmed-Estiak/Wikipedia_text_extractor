@@ -386,6 +386,7 @@ def raw_dmp_partial_match(
     locator_refine_tokens: int = 20,
     locator_min_score: float = 0.72,
     locator_max_candidates: int = 240,
+    raw_visible_data: tuple[str, list[int]] | None = None,
 ) -> tuple[str, str]:
     # Finds pasted boundaries in raw-visible HTML, then cleans only the matched raw slice.
     if chunk_size > 32:
@@ -395,7 +396,7 @@ def raw_dmp_partial_match(
     if locator_refine_tokens < 8:
         raise ValueError("locator_refine_tokens must be at least 8")
     diff_match_patch = load_diff_match_patch()
-    raw_visible, raw_visible_map = raw_html_visible_text_with_map(html)
+    raw_visible, raw_visible_map = raw_visible_data or raw_html_visible_text_with_map(html)
     raw_normalized, raw_map = normalize_raw_dmp_text_with_map(raw_visible, raw_visible_map)
     _raw_normalized_visible, raw_visible_normalized_map = normalize_raw_dmp_text_with_map(raw_visible)
     copied_normalized, _copied_map = normalize_raw_dmp_text_with_map(copied_text)

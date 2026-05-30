@@ -9,7 +9,7 @@ cd /d "C:\Users\Lenovo Legion\Desktop\Wikipedia_text_extractor"
 This launch command list focuses on English Wikipedia pages and the two primary products:
 
 - Full text extraction with HTML parser and Extracts API
-- Partial text extraction with the hybrid heading/citation matcher
+- Partial text extraction with the shared best fallback matcher
 
 Replace the URL and output file name when testing another page.
 
@@ -81,7 +81,7 @@ Run both methods for only one math mode:
 .venv\Scripts\python.exe compare_extraction_methods.py --url "https://en.wikipedia.org/wiki/Large_language_model" --math latex --output output\large_language_model.txt
 ```
 
-## Partial Text: Hybrid Method
+## Partial Text: Best Fallback Method
 
 Before running, paste copied Wikipedia text into:
 
@@ -97,6 +97,36 @@ notepad input_text\partial_input.txt
 ```
 
 Default partial clean output:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_best.py --url "https://en.wikipedia.org/wiki/Large_language_model"
+```
+
+Default behavior:
+
+- Uses LaTeX math.
+- Reads `input_text\partial_input.txt`.
+- Tries `dmp_raw_html -> hybrid -> token_raw_html`.
+- Fetches the Wikipedia page once and reuses shared preparation where possible.
+- Writes only the final successful clean partial output.
+- Removes inline citation numbers from the final output by default.
+
+Use a custom copied input file:
+
+```cmd
+.venv\Scripts\python.exe extract_partial_best.py --url "https://en.wikipedia.org/wiki/Large_language_model" --input input_text\partial_input.txt
+```
+
+Best fallback outputs:
+
+```text
+output\Large_language_model\English\partial_best_text.txt
+output\Large_language_model\English\partial_best_match_report.txt
+```
+
+## Partial Text: Hybrid Method
+
+Use this when you want to test only the heading/citation hybrid matcher:
 
 ```cmd
 .venv\Scripts\python.exe extract_partial_hybrid.py --url "https://en.wikipedia.org/wiki/Large_language_model"
@@ -330,6 +360,8 @@ large_language_model_extracts_remove.txt
 large_language_model_extracts_keep.txt
 large_language_model_comparison.txt
 large_language_model_runtime.txt
+partial_best_text.txt
+partial_best_match_report.txt
 partial_hybrid_text.txt
 partial_hybrid_match_report.txt
 partial_token_text.txt
@@ -348,6 +380,10 @@ Use `--title` with `--lang` if you do not want to pass a URL.
 
 ```cmd
 .venv\Scripts\python.exe extract_with_html_parser.py --title "Large language model" --lang en --math latex --output output\large_language_model.txt
+```
+
+```cmd
+.venv\Scripts\python.exe extract_partial_best.py --title "Large language model" --lang en
 ```
 
 ```cmd

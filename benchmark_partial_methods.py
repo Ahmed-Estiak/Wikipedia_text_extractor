@@ -1,4 +1,10 @@
-"""Benchmark partial extraction methods and append 5-way results to CSV."""
+"""Benchmark partial extraction methods and append 5-way results to CSV.
+
+This script is a comparison harness, not a production extractor. It fetches one
+Wikipedia page, prepares one shared pasted-input sample, runs five different
+partial matching strategies against the same data, writes each extracted text
+result to disk, and appends one CSV row per method for later analysis.
+"""
 
 from __future__ import annotations
 
@@ -31,9 +37,19 @@ from wiki_text_extractor import (
 )
 
 
+# Default pasted-text fixture used when --input is not supplied.
 DEFAULT_INPUT_PATH = Path("input_text") / "partial_input.txt"
+
+# Increment this when CSV columns or meanings change so old benchmark files can
+# be distinguished from new ones.
 BENCHMARK_SCHEMA_VERSION = "2"
+
+# Fixed method order keeps text-file cleanup, CSV row order, and console output
+# stable across runs.
 BENCHMARK_METHODS = ("hybrid", "token", "dmp", "token_raw_html", "dmp_raw_html")
+
+# Per-method metadata used to describe the benchmark row without hard-coding
+# those labels throughout method_row().
 METHOD_META = {
     "hybrid": ("hybrid", "clean_text", "clean_text_chars", True),
     "token": ("token", "clean_text", "clean_text_chars", True),
@@ -41,6 +57,9 @@ METHOD_META = {
     "token_raw_html": ("token", "raw_html", "raw_html_chars", False),
     "dmp_raw_html": ("dmp", "raw_html", "raw_html_chars", False),
 }
+
+# CSV schema for every appended benchmark row. Keep this list ordered because it
+# also acts as the compatibility check for existing CSV files.
 CSV_FIELDS = [
     "schema_version",
     "run_id",
@@ -78,11 +97,16 @@ CSV_FIELDS = [
 ]
 
 
+# MethodRunner returns:
+# extracted text, start offset, end offset, start score, end score, score
+# summary, and the full human-readable method report.
 MethodRunner = Callable[[], tuple[str, str, str, str, str, str, str]]
 
 
 def build_parser() -> argparse.ArgumentParser:
     # Defines one command that benchmarks all five partial matching methods.
+    # Most options expose matcher thresholds so repeated experiments can be
+    # compared without editing code.
     parser = argparse.ArgumentParser(
         description="Run partial hybrid/token/DMP/raw-HTML matchers and append 5-way timing rows to CSV."
     )
@@ -213,6 +237,8 @@ def read_pasted_text(path: Path) -> str:
 
 def benchmark_csv_path(output: str, page: PageRequest) -> Path:
     # Stores the clean 5-way benchmark CSV beside other topic/language outputs.
+    # The caller may pass a full path, but output_directory() still anchors it
+    # under the standard page-specific output folder.
     suffix = Path(output).suffix or ".csv"
     return output_directory(output, page) / f"{topic_file_stem(page)}_partial_benchmark_5way{suffix}"
 
@@ -224,6 +250,8 @@ def benchmark_text_output_path(output: str, page: PageRequest, method: str) -> P
 
 def clear_benchmark_text_outputs(output: str, page: PageRequest) -> dict[str, Path]:
     # Removes stale benchmark text files before a new five-method run starts.
+    # This prevents a failed method from leaving yesterday's successful output
+    # in place and confusing manual inspection.
     paths = {
         method: benchmark_text_output_path(output, page, method)
         for method in BENCHMARK_METHODS
@@ -254,6 +282,8 @@ def report_value(report: str, label: str) -> str:
 
 def append_benchmark_rows(path: Path, rows: list[dict[str, str]]) -> None:
     # Appends rows only when the existing CSV already has the v2 header intact.
+    # If the header differs, the file is rewritten with the current schema
+    # instead of mixing incompatible column layouts.
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = True
     mode = "w"
@@ -303,6 +333,8 @@ def method_row(
     error: str = "",
 ) -> dict[str, str]:
     # Builds one v2 CSV row for one method run.
+    # The base fields describe the shared page/input. The method-specific fields
+    # below describe one matcher's timing, output, offsets, scores, and errors.
     method_family, match_surface, offset_basis, _meta_uses_full_clean = METHOD_META[method]
     estimated_total = fetch_seconds + match_seconds
     if uses_full_clean:
@@ -350,6 +382,8 @@ def run_method(
     output_path: Path,
 ) -> tuple[dict[str, str], str | None]:
     # Times one matcher and converts success/failure into a CSV row.
+    # Failures are kept as benchmark data instead of aborting the entire run, so
+    # one weak method can be compared against the methods that still succeeded.
     started_at = time.perf_counter()
     uses_full_clean = METHOD_META[method][3]
     try:
@@ -397,6 +431,8 @@ def run_method(
 
 def update_baseline_comparisons(rows: list[dict[str, str]], texts: dict[str, str]) -> None:
     # Fills output equality columns after all methods have had a chance to run.
+    # Hybrid and token are the easiest clean-text baselines to compare against,
+    # so other successful methods get boolean equality flags for both.
     hybrid_text = texts.get("hybrid")
     token_text = texts.get("token")
     for row in rows:
@@ -413,12 +449,17 @@ def update_baseline_comparisons(rows: list[dict[str, str]], texts: dict[str, str
 def main(argv: Iterable[str] | None = None) -> int:
     # Runs shared fetch/full-clean once, then benchmarks five partial matching methods.
     args = build_parser().parse_args(argv)
+
+    # A page can be selected either by URL, which may include language/project
+    # information, or by title plus --lang for direct API lookup.
     page = page_request_from_url(args.url) if args.url else PageRequest(args.title, args.lang)
     input_path = Path(args.input)
     csv_path = benchmark_csv_path(args.csv, page)
     text_output_paths = clear_benchmark_text_outputs(args.csv, page)
 
     try:
+        # Shared input metadata is recorded once and copied into every method
+        # row, making each CSV row independently useful during filtering.
         pasted_text = read_pasted_text(input_path)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         base = {
@@ -433,10 +474,15 @@ def main(argv: Iterable[str] | None = None) -> int:
             "math_mode": args.math,
         }
 
+        # Fetch once so network timing is measured consistently and every
+        # matcher receives the same HTML snapshot.
         fetch_started_at = time.perf_counter()
         html = fetch_page_html(page)
         fetch_seconds = time.perf_counter() - fetch_started_at
 
+        # Clean-text matchers need the expensive full Wikipedia cleanup step.
+        # Raw-HTML matchers skip this step during matching, but we still measure
+        # it once so total cost can be compared fairly for clean-text methods.
         clean_started_at = time.perf_counter()
         full_text = clean_wikipedia_html_with_references(
             html,
@@ -448,6 +494,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         full_clean_seconds = time.perf_counter() - clean_started_at
 
         def run_hybrid() -> tuple[str, str, str, str, str, str, str]:
+            # Hybrid matcher works on fully cleaned text and uses sentence/window
+            # confidence rather than explicit boundary scores.
             result = extract_partial_hybrid_text(
                 full_text,
                 pasted_text,
@@ -467,6 +515,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             )
 
         def run_token() -> tuple[str, str, str, str, str, str, str]:
+            # Clean-token matcher finds start and end anchors in the cleaned
+            # article text, then refines the boundary with smaller token chunks.
             result = extract_partial_token_text(
                 full_text,
                 pasted_text,
@@ -488,6 +538,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             )
 
         def run_dmp() -> tuple[str, str, str, str, str, str, str]:
+            # Clean-DMP matcher uses diff-match-patch style local matching on
+            # cleaned text, with token locator settings reused as a fallback aid.
             text, report = dmp_partial_match(
                 full_text,
                 pasted_text,
@@ -514,6 +566,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             )
 
         def run_token_raw_html() -> tuple[str, str, str, str, str, str, str]:
+            # Raw-token matcher searches the original HTML surface directly and
+            # returns offsets in raw HTML coordinates.
             text, report = raw_token_partial_match(
                 html,
                 pasted_text,
@@ -536,6 +590,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             )
 
         def run_dmp_raw_html() -> tuple[str, str, str, str, str, str, str]:
+            # Raw-DMP matcher also searches the original HTML, using coverage
+            # thresholds instead of token boundary scores.
             text, report = raw_dmp_partial_match(
                 html,
                 pasted_text,
@@ -560,6 +616,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                 report,
             )
 
+        # Each tuple contains the public method name, the no-argument runner,
+        # and a compact settings string stored in the CSV for reproducibility.
         runners: list[tuple[str, MethodRunner, str]] = [
             ("hybrid", run_hybrid, f"threshold={args.hybrid_threshold:.3f};references=none"),
             (
@@ -602,6 +660,8 @@ def main(argv: Iterable[str] | None = None) -> int:
 
         rows: list[dict[str, str]] = []
         texts: dict[str, str] = {}
+        # Run methods sequentially because they share already-fetched input and
+        # their per-method timings should not be distorted by concurrent CPU use.
         for method, runner, settings in runners:
             row, text = run_method(
                 method,
@@ -615,6 +675,9 @@ def main(argv: Iterable[str] | None = None) -> int:
             rows.append(row)
             if text is not None:
                 texts[method] = text
+
+        # Equality columns require all successful texts, so they are filled only
+        # after every method has either succeeded or produced an error row.
         update_baseline_comparisons(rows, texts)
         append_benchmark_rows(csv_path, rows)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
